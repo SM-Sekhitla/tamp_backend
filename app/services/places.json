@@ -1,0 +1,86 @@
+{
+  "johannesburg": {
+    "label": "Johannesburg",
+    "province": "GP",
+    "lat": -26.2041,
+    "lng": 28.0473
+  },
+  "durban": {
+    "label": "Durban",
+    "province": "KZN",
+    "lat": -29.8587,
+    "lng": 31.0218
+  },
+  "capeTown": {
+    "label": "Cape Town",
+    "province": "WC",
+    "lat": -33.9249,
+    "lng": 18.4241
+  },
+  "gqeberha": {
+    "label": "Gqeberha",
+    "province": "EC",
+    "lat": -33.9608,
+    "lng": 25.6022
+  },
+  "pretoria": {
+    "label": "Pretoria",
+    "province": "GP",
+    "lat": -25.7479,
+    "lng": 28.2293
+  },
+  "musina": {
+    "label": "Musina",
+    "province": "LP",
+    "lat": -22.3285,
+    "lng": 30.0454
+  },
+  "rustenburg": {
+    "label": "Rustenburg",
+    "province": "NW",
+    "lat": -25.6672,
+    "lng": 27.2424
+  },
+  "richardsBay": {
+    "label": "Richards Bay",
+    "province": "KZN",
+    "lat": -28.7807,
+    "lng": 32.0383
+  },
+  "bloemfontein": {
+    "label": "Bloemfontein",
+    "province": "FS",
+    "lat": -29.0852,
+    "lng": 26.1596
+  },
+  "kimberley": {
+    "label": "Kimberley",
+    "province": "NC",
+    "lat": -28.7282,
+    "lng": 24.7499
+  },
+  "alberton": {
+    "label": "Alberton",
+    "province": "GP",
+    "lat": -26.2679,
+    "lng": 28.1222
+  },
+  "germiston": {
+    "label": "Germiston",
+    "province": "GP",
+    "lat": -26.2309,
+    "lng": 28.1751
+  },
+  "bellville": {
+    "label": "Bellville",
+    "province": "WC",
+    "lat": -33.8994,
+    "lng": 18.6292
+  },
+  "pretoriaNorth": {
+    "label": "Pretoria North",
+    "province": "GP",
+    "lat": -25.6541,
+    "lng": 28.1897
+  }
+}
