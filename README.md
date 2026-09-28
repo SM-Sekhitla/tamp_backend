@@ -83,3 +83,9 @@ ruff check app scripts tests alembic
 ```
 
 The suite covers registration, sessions, resets, CSRF, permissions, private uploads, rate limiting, signed tracking, generated matching, snapshot atomicity, concurrent acceptance, complete delivery, and webhook outbox handling. Playwright is not used.
+
+## Render startup
+
+For a single API instance, set Render's Docker Command to `sh /app/scripts/start_render.sh` after deploying an image containing this script. It runs migrations against `DATABASE_URL` before starting the API and uses Render's `PORT` value (default 5000). Do not wrap the command in quotes.
+
+For multiple API instances, run `python -m alembic upgrade head` once in a pre-deploy job and use the normal API command for each instance.
