@@ -1,3 +1,5 @@
+import pytest
+
 from app.core.security import token_hash
 from app.db.models import Party, Session
 from app.db.session import SessionLocal
@@ -129,3 +131,22 @@ def test_batch_and_direct_api(client, accounts):
     assert r.status_code == 200 and len(r.json()) == 2
     r = client.post("/api/v1/auth/updateProfile", json={"contactName": "Updated"})
     assert r.status_code == 200 and r.json()["contactName"] == "Updated"
+
+
+def test_bootstrap_local_email_is_login_only():
+    from pydantic import ValidationError
+
+    from app.schemas.auth import Login, Register
+
+    Login(email="tamp-admin@tamp.local", password="password")
+    with pytest.raises(ValidationError):
+        Register(
+            email="new-user@tamp.local",
+            password="Strong-password-123",
+            code="123456",
+            userType="CARGO_OWNER",
+            firstName="New",
+            lastName="User",
+            phone="0821234567",
+            province="GP",
+        )

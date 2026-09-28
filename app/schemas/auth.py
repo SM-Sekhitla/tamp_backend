@@ -55,6 +55,7 @@ class Driver(Input):
 
 
 class Register(Login):
+    email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     code: str = Field(pattern=r"^\d{6}$")
     userType: Literal["CARGO_OWNER", "CARRIER", "BROKER", "DRIVER"]
