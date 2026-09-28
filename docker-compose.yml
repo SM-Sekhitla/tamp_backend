@@ -24,6 +24,9 @@ services:
         condition: service_healthy
   backend:
     build: .
+    networks:
+      - default
+      - tamp
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
@@ -53,3 +56,7 @@ services:
 volumes:
   postgres_data:
   uploads:
+
+networks:
+  tamp:
+    name: ${TAMP_NETWORK:-tamp-network}

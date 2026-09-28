@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-    app_name: str = "TAMP Backend"
+    app_name: str = "TAMP"
     environment: str = "development"
     database_url: str = "postgresql+psycopg://tamp:tamp@localhost:5432/tamp"
     secret_key: str = "development-only-change-before-deployment"

@@ -19,13 +19,17 @@ docker compose exec backend python -m scripts.create_admin admin@example.com
 
 On first API startup with `BOOTSTRAP_SECRET` set, TAMP creates one platform `system_super_user` using `DEFAULT_PLATFORM_ADMIN_USERNAME` and `DEFAULT_PLATFORM_ADMIN_EMAIL`. Leave `DEFAULT_PLATFORM_ADMIN_PASSWORD` empty to generate a temporary password. The generated password is written to startup logs only when the account is created, so save it immediately. Later startups detect the existing account and do not log another password. Set a fixed bootstrap password only when explicitly required. The API listens at `http://localhost:5000`; API docs are at `/docs`, readiness at `/api/v1/health`, and liveness at `/healthz`.
 
-To run the sibling frontend in the same Docker network:
+The backend creates the shared `tamp-network` Docker network. Once it is healthy, start the sibling frontend using its own Compose file:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.frontend.yml up --build -d
+docker compose up --build -d --wait
+cd /home/hlaks/Documents/TAMP/tamp_frontend/TAMP
+docker compose up --build -d --wait
 ```
 
-Open `http://localhost:3000`. For Vite development, set `VITE_API_TARGET=http://localhost:5000` in the frontend `.env` and run `npm run dev` from `tamp_frontend/TAMP`.
+Open `http://localhost:3000`. nginx forwards `/api` to `http://backend:5000` over the shared network; PostgreSQL and the worker stay on the backend’s private network. If overriding `TAMP_NETWORK`, set the same value in both repositories. Stop the frontend before taking down the backend network. Verify the connection with `curl --fail http://localhost:3000/api/v1/health`.
+
+For Vite development, set `VITE_API_TARGET=http://localhost:5000` in the frontend `.env` and run `npm run dev` from `tamp_frontend/TAMP`.
 
 ## Local development
 
