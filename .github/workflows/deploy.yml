@@ -12,7 +12,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: ./src
+        working-directory: .
         
     steps:
       -
@@ -34,8 +34,8 @@ jobs:
         name: Build and push
         uses: docker/build-push-action@v7
         with:
-          context: ./src
-          file: ./src/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           tags: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_IMAGE }}:latest
 
