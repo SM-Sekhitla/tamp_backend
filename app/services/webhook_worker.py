@@ -1,5 +1,6 @@
 """Run separately: python -m app.services.webhook_worker (at-least-once delivery)."""
 
+import asyncio
 import hashlib
 import hmac
 import http.client
@@ -7,7 +8,6 @@ import ipaddress
 import json
 import logging
 import socket
-import time
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -17,7 +17,7 @@ from app.controllers.webhooks import cipher
 from app.core.config import settings
 from app.core.security import now
 from app.db.models import MODELS
-from app.db.session import SessionLocal
+from app.db.session import AsyncSessionLocal
 from app.services.records import get
 
 
@@ -52,10 +52,10 @@ def deliver(url, body, secret, ident):
         conn.close()
 
 
-def tick():
-    with SessionLocal.begin() as db:
+async def tick():
+    async with AsyncSessionLocal.begin() as db:
         model = MODELS["deliveries"]
-        job = db.scalar(
+        job = await db.scalar(
             select(model)
             .where(
                 model.data["status"].as_string() == "PENDING",
@@ -66,38 +66,47 @@ def tick():
         )
         if not job:
             return False
-        endpoint = get(db, "webhooks", job.data["endpointId"])
-        d = dict(job.data)
-        d["attempts"] += 1
+        endpoint = await db.run_sync(
+            lambda sync_db: get(sync_db, "webhooks", job.data["endpointId"])
+        )
+        data = dict(job.data)
+        data["attempts"] += 1
         try:
             if not endpoint or not endpoint.data["active"]:
                 raise ValueError("Endpoint disabled or removed")
             secret = cipher().decrypt(endpoint.data["encryptedSecret"].encode()).decode()
-            code = deliver(
+            code = await asyncio.to_thread(
+                deliver,
                 endpoint.data["url"],
-                json.dumps(d["payload"], sort_keys=True).encode(),
+                json.dumps(data["payload"], sort_keys=True).encode(),
                 secret,
                 job.id,
             )
-            d["responseCode"] = code
+            data["responseCode"] = code
             if not 200 <= code < 300:
                 raise ValueError(f"HTTP {code}")
-            d["status"] = "DELIVERED"
-            d["lastError"] = None
+            data["status"] = "DELIVERED"
+            data["lastError"] = None
         except Exception as exc:
-            d["lastError"] = type(exc).__name__
-            d["status"] = "FAILED" if d["attempts"] >= 5 else "PENDING"
-            d["nextAttempt"] = (now() + timedelta(seconds=30 * 2 ** d["attempts"])).isoformat()
-        job.data = d
+            data["lastError"] = type(exc).__name__
+            data["status"] = "FAILED" if data["attempts"] >= 5 else "PENDING"
+            data["nextAttempt"] = (
+                now() + timedelta(seconds=30 * 2 ** data["attempts"])
+            ).isoformat()
+        job.data = data
         return True
+
+
+async def main():
+    while True:
+        try:
+            if not await tick():
+                await asyncio.sleep(2)
+        except Exception:
+            logging.exception("Webhook worker failed")
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    while True:
-        try:
-            if not tick():
-                time.sleep(2)
-        except Exception:
-            logging.exception("Webhook worker failed")
-            time.sleep(5)
+    asyncio.run(main())

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import secrets
 
@@ -7,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.core.security import iso, new_id, passwords
 from app.db.models import Party
-from app.db.session import SessionLocal
+from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger("tamp.bootstrap")
 _BOOTSTRAP_LOCK_ID = 847220
@@ -17,8 +18,8 @@ def _generate_password():
     return secrets.token_urlsafe(18)
 
 
-def ensure_platform_super_user():
-    """Create the initial platform super-user once when bootstrap is enabled."""
+async def ensure_platform_super_user():
+    # Create the initial platform super-user once when bootstrap is enabled.
     if not settings.bootstrap_secret:
         return None
 
@@ -32,10 +33,9 @@ def ensure_platform_super_user():
 
     generated_password = None
     try:
-        with SessionLocal.begin() as db:
-            # Serialize bootstrap across multiple application workers/containers.
-            db.execute(text(f"SELECT pg_advisory_xact_lock({_BOOTSTRAP_LOCK_ID})"))
-            existing = db.scalar(
+        async with AsyncSessionLocal.begin() as db:
+            await db.execute(text(f"SELECT pg_advisory_xact_lock({_BOOTSTRAP_LOCK_ID})"))
+            existing = await db.scalar(
                 select(Party)
                 .where(
                     or_(
@@ -66,11 +66,12 @@ def ensure_platform_super_user():
             password = fixed_password or _generate_password()
             generated_password = None if fixed_password else password
             ident = new_id("SUP")
+            password_hash = await asyncio.to_thread(passwords.hash, password)
             db.add(
                 Party(
                     id=ident,
                     email=email,
-                    password_hash=passwords.hash(password),
+                    password_hash=password_hash,
                     data={
                         "id": ident,
                         "username": username,
@@ -92,7 +93,6 @@ def ensure_platform_super_user():
                 )
             )
     except IntegrityError:
-        # A unique-email race means another process completed bootstrap first.
         logger.info("Platform super-user was bootstrapped by another process")
         return None
 

@@ -1,6 +1,6 @@
 # TAMP backend
 
-FastAPI + PostgreSQL backend for the TAMP React frontend. Its layout follows the PRISM reference repository: versioned API routes, controllers, services, schemas, database models, middleware, Alembic migrations, and tests.
+Asynchronous FastAPI + PostgreSQL backend for the TAMP React frontend. Its layout follows the PRISM reference repository: versioned API routes, controllers, services, schemas, database models, middleware, Alembic migrations, and tests.
 
 ## Docker startup
 
@@ -45,6 +45,10 @@ uvicorn app.main:app --host 127.0.0.1 --port 5000 --reload --no-proxy-headers
 
 No database tables or users are silently created when the API starts.
 
+## Async runtime
+
+The API uses SQLAlchemy's async engine, `AsyncSession`, and the `asyncpg` PostgreSQL driver. FastAPI routes, rate limiting, startup bootstrap, Alembic migrations, and the webhook worker all use awaited I/O. Existing domain services run through SQLAlchemy's `AsyncSession.run_sync` compatibility bridge; SQLAlchemy database operations inside that bridge still yield through the async driver while preserving the established authorization and transaction logic.
+
 ## Architecture and compatibility
 
 The database uses separate domain tables with relational ownership and references. JSONB stores nested frontend documents such as locations, score breakdowns, and trip events while preserving the frontend's camelCase wire shape. Credentials, sessions, verification codes, and rate-limit counters use dedicated tables.
@@ -76,7 +80,7 @@ For production, set `ENVIRONMENT=production`, secure cookies, unique credentials
 Tests require a disposable PostgreSQL database whose name includes `test`; its application tables are truncated.
 
 ```bash
-export TEST_DATABASE_URL=postgresql+psycopg://tamp:password@localhost:5432/tamp_test
+export TEST_DATABASE_URL=postgresql+asyncpg://tamp:password@localhost:5432/tamp_test
 DATABASE_URL="$TEST_DATABASE_URL" alembic upgrade head
 pytest -q
 ruff check app scripts tests alembic

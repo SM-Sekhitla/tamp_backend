@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     app_name: str = "TAMP"
     environment: str = "development"
-    database_url: str = "postgresql+psycopg://tamp:tamp@localhost:5432/tamp"
+    database_url: str = "postgresql+asyncpg://tamp:tamp@localhost:5432/tamp"
     secret_key: str = "development-only-change-before-deployment"
     cookie_secure: bool = False
     session_hours: int = 24
@@ -37,7 +37,10 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = "noreply@tamp.local"
     smtp_starttls: bool = True
-    google_maps_api_key: str = ""
+    geocoding_provider: str = "photon"
+    photon_url: str = "https://photon.komoot.io"
+    routing_provider: str = "valhalla"
+    valhalla_url: str = "https://valhalla1.openstreetmap.de"
     upload_path: str = "storage/uploads"
     max_upload_bytes: int = 10 * 1024 * 1024
     max_account_upload_bytes: int = 100 * 1024 * 1024

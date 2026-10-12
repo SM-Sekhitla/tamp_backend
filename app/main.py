@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.api.v1.router import router
 from app.core.config import settings
 from app.core.errors import AppError
+from app.db.session import engine
 from app.middleware.body_limit import BodyLimitMiddleware
 from app.middleware.csrf import CsrfMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -23,8 +24,11 @@ from app.middleware.security import SecurityHeadersMiddleware
 async def lifespan(app: FastAPI):
     from app.services.initial_users import ensure_platform_super_user
 
-    ensure_platform_super_user()
-    yield
+    await ensure_platform_super_user()
+    try:
+        yield
+    finally:
+        await engine.dispose()
 
 
 def create_app():

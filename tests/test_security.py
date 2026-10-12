@@ -4,7 +4,7 @@ from PIL import Image
 
 from app.core.config import settings
 
-from .conftest import login, result, rpc
+from .conftest import async_run, db_call, login, result, rpc
 
 
 def test_upload_validation_and_private_download(client, accounts):
@@ -92,7 +92,6 @@ def test_masked_truck_does_not_accept_forged_scoring_inputs(client, accounts):
 
 
 def test_webhook_outbox_and_worker_retry(client, accounts, monkeypatch):
-    from app.db.session import SessionLocal
     from app.services.records import rows
     from app.services.webhook_worker import tick
 
@@ -123,11 +122,14 @@ def test_webhook_outbox_and_worker_retry(client, accounts, monkeypatch):
             return 204
 
         monkeypatch.setattr("app.services.webhook_worker.deliver", delivery)
-        assert tick()
+        assert async_run(tick())
         assert calls[0][2] == hook["secret"]
-        with SessionLocal() as db:
+
+        def verify_database(db):
             assert rows(db, "deliveries")[0].data["status"] == "DELIVERED"
             assert "encryptedSecret" in rows(db, "webhooks")[0].data
+
+        db_call(verify_database)
         listed = result(rpc(client, "webhooks.list"))
         assert "encryptedSecret" not in listed[0]
     finally:

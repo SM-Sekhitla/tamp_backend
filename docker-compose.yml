@@ -17,7 +17,7 @@ services:
     build: .
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
+      DATABASE_URL: postgresql+asyncpg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
     command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
@@ -29,7 +29,7 @@ services:
       - tamp
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
+      DATABASE_URL: postgresql+asyncpg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
     volumes:
       - uploads:/app/storage/uploads
     ports:
@@ -47,7 +47,7 @@ services:
     build: .
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
+      DATABASE_URL: postgresql+asyncpg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
     command: ["python", "-m", "app.services.webhook_worker"]
     depends_on:
       migrate:

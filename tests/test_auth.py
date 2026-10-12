@@ -2,9 +2,8 @@ import pytest
 
 from app.core.security import token_hash
 from app.db.models import Party, Session
-from app.db.session import SessionLocal
 
-from .conftest import login, result, rpc
+from .conftest import db_call, login, result, rpc
 
 
 def test_registration_verification_login_and_revocation(client):
@@ -32,9 +31,12 @@ def test_registration_verification_login_and_revocation(client):
     party = result(r)
     assert "HttpOnly" in r.headers["set-cookie"]
     assert party["id"] == ident and party["role"] == "FREIGHT_OWNER"
-    with SessionLocal() as db:
+
+    def verify_database(db):
         assert db.get(Party, ident).password_hash.startswith("$argon2")
         assert db.get(Session, token_hash(client.cookies["tamp_session"]))
+
+    db_call(verify_database)
     assert result(rpc(client, "auth.me"))["id"] == ident
     result(rpc(client, "auth.logout", {}, True))
     assert result(rpc(client, "auth.me")) is None

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -9,105 +10,159 @@ from app.core.errors import AppError, require
 PLACES = json.loads(Path(__file__).with_name("places.json").read_text())
 
 
-def google(method, url, **kwargs):
+async def provider_request(method, url, **kwargs):
     try:
-        with httpx.Client(timeout=10, follow_redirects=False) as client:
-            response = client.request(method, url, **kwargs)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+            response = await client.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise AppError("Mapping provider unavailable", 503) from exc
 
 
-def autocomplete(data):
-    if not settings.google_maps_api_key:
-        return [
-            {
-                "id": "local:" + key,
-                "primary": p["label"] + " (city centre)",
-                "secondary": p["province"],
-                "place": p,
-            }
-            for key, p in PLACES.items()
-            if data.query.lower() in p["label"].lower()
-        ][:10]
-    result = google(
-        "GET",
-        "https://maps.googleapis.com/maps/api/place/autocomplete/json",
-        params={
-            "key": settings.google_maps_api_key,
-            "input": data.query,
-            "components": "country:za",
-            **({"sessiontoken": data.sessionToken} if data.sessionToken else {}),
-        },
-    )
-    require(result.get("status") in ["OK", "ZERO_RESULTS"], "Place search unavailable", 503)
+def _local_autocomplete(query):
     return [
         {
-            "id": p["place_id"],
-            "primary": p["structured_formatting"]["main_text"],
-            "secondary": p["structured_formatting"].get("secondary_text", ""),
+            "id": "local:" + key,
+            "primary": p["label"] + " (city centre)",
+            "secondary": p["province"],
+            "place": p,
         }
-        for p in result.get("predictions", [])
+        for key, p in PLACES.items()
+        if query.lower() in p["label"].lower()
+    ][:10]
+
+
+def _feature_place(feature):
+    coordinates = feature.get("geometry", {}).get("coordinates", [])
+    properties = feature.get("properties", {})
+    require(len(coordinates) >= 2, "Place result has no coordinates", 503)
+    parts = [
+        properties.get("name"),
+        properties.get("street"),
+        properties.get("housenumber"),
+        properties.get("city") or properties.get("town") or properties.get("village"),
+        properties.get("state"),
+        properties.get("country"),
     ]
+    label = ", ".join(dict.fromkeys(str(part) for part in parts if part))
+    return {
+        "label": label or "Selected location",
+        "province": properties.get("state") or properties.get("county") or "",
+        "lat": float(coordinates[1]),
+        "lng": float(coordinates[0]),
+    }
 
 
-def details(data):
+def _decode_polyline6(encoded):
+    """Decode Valhalla's six-decimal polyline into GeoJSON [lng, lat] points."""
+    coordinates = []
+    index = latitude = longitude = 0
+    while index < len(encoded):
+        deltas = []
+        for _ in range(2):
+            result = shift = 0
+            while True:
+                require(index < len(encoded), "Routing provider returned invalid geometry", 503)
+                value = ord(encoded[index]) - 63
+                index += 1
+                result |= (value & 0x1F) << shift
+                shift += 5
+                if value < 0x20:
+                    break
+            deltas.append(~(result >> 1) if result & 1 else result >> 1)
+        latitude += deltas[0]
+        longitude += deltas[1]
+        coordinates.append([longitude / 1_000_000, latitude / 1_000_000])
+    return coordinates
+
+
+async def autocomplete(data):
+    if settings.geocoding_provider != "photon" or not settings.photon_url:
+        return _local_autocomplete(data.query)
+    result = await provider_request(
+        "GET",
+        settings.photon_url.rstrip("/") + "/api",
+        params={"q": data.query, "limit": 10, "lang": "en", "bbox": "16,-35,33,-22"},
+        headers={"User-Agent": "TAMP/1.0 (address search)"},
+    )
+    predictions = []
+    for feature in result.get("features", []):
+        try:
+            place = _feature_place(feature)
+        except AppError:
+            continue
+        properties = feature.get("properties", {})
+        ident = quote(json.dumps(place, separators=(",", ":")), safe="")
+        secondary = ", ".join(
+            part
+            for part in [
+                properties.get("city") or properties.get("town") or properties.get("village"),
+                properties.get("state"),
+                properties.get("country"),
+            ]
+            if part
+        )
+        predictions.append(
+            {
+                "id": "photon:" + ident,
+                "primary": properties.get("name") or place["label"],
+                "secondary": secondary,
+                "place": place,
+            }
+        )
+    return predictions or _local_autocomplete(data.query)
+
+
+async def details(data):
+    if data.placeId.startswith("photon:"):
+        try:
+            return json.loads(unquote(data.placeId[7:]))
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise AppError("Place not found", 404) from exc
     if data.placeId.startswith("local:"):
         place = PLACES.get(data.placeId[6:])
         require(place is not None, "Place not found", 404)
         return place
-    require(bool(settings.google_maps_api_key), "Configure GOOGLE_MAPS_API_KEY", 503)
-    result = google(
-        "GET",
-        "https://maps.googleapis.com/maps/api/place/details/json",
-        params={
-            "key": settings.google_maps_api_key,
-            "place_id": data.placeId,
-            "fields": "formatted_address,geometry,address_components",
-            **({"sessiontoken": data.sessionToken} if data.sessionToken else {}),
-        },
-    )
-    require(result.get("status") == "OK", "Place not found", 404)
-    p = result["result"]
-    province = next(
-        (
-            a["short_name"]
-            for a in p["address_components"]
-            if "administrative_area_level_1" in a["types"]
-        ),
-        "",
-    )
-    return {"label": p["formatted_address"], "province": province, **p["geometry"]["location"]}
+    raise AppError("Place not found", 404)
 
 
-def route(data):
-    if not settings.google_maps_api_key:
+async def route(data):
+    if settings.routing_provider != "valhalla" or not settings.valhalla_url:
         return None
-    p = google(
+    result = await provider_request(
         "POST",
-        "https://routes.googleapis.com/directions/v2:computeRoutes",
-        headers={
-            "X-Goog-Api-Key": settings.google_maps_api_key,
-            "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline",
-        },
+        settings.valhalla_url.rstrip("/") + "/route",
         json={
-            "origin": {
-                "location": {"latLng": {"latitude": data.origin.lat, "longitude": data.origin.lng}}
-            },
-            "destination": {
-                "location": {
-                    "latLng": {"latitude": data.destination.lat, "longitude": data.destination.lng}
-                }
-            },
-            "travelMode": "DRIVE",
+            "locations": [
+                {"lat": data.origin.lat, "lon": data.origin.lng, "type": "break"},
+                {"lat": data.destination.lat, "lon": data.destination.lng, "type": "break"},
+            ],
+            "costing": "truck",
+            "units": "kilometers",
+            "shape_format": "geojson",
+            "directions_options": {"units": "kilometers"},
         },
+        headers={"User-Agent": "TAMP/1.0 (freight routing)"},
     )
-    if not p.get("routes"):
+    trip = result.get("trip", {})
+    legs = trip.get("legs", [])
+    if not legs:
         return None
-    r = p["routes"][0]
+    coordinates = []
+    for leg in legs:
+        shape = leg.get("shape")
+        if isinstance(shape, dict) and shape.get("type") == "LineString":
+            points = shape.get("coordinates", [])
+            coordinates.extend(points[1:] if coordinates else points)
+        elif isinstance(shape, str):
+            points = _decode_polyline6(shape)
+            coordinates.extend(points[1:] if coordinates else points)
+    require(len(coordinates) >= 2, "Routing provider returned no route geometry", 503)
+    summary = trip.get("summary", {})
     return {
-        "distanceKm": round(r["distanceMeters"] / 1000, 1),
-        "durationMin": round(float(r["duration"].rstrip("s")) / 60),
-        "encodedPolyline": r["polyline"]["encodedPolyline"],
+        "distanceKm": round(float(summary.get("length", 0)), 1),
+        "durationMin": round(float(summary.get("time", 0)) / 60),
+        "geometry": {"type": "LineString", "coordinates": coordinates},
+        "provider": "valhalla",
     }
