@@ -1,4 +1,8 @@
+import base64
+import hashlib
+import hmac
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -6,8 +10,34 @@ import httpx
 
 from app.core.config import settings
 from app.core.errors import AppError, require
+from app.core.security import now
 
 PLACES = json.loads(Path(__file__).with_name("places.json").read_text())
+
+
+def _route_token(route_result, origin, destination):
+    payload = {
+        "origin": {"lat": origin.lat, "lng": origin.lng},
+        "destination": {"lat": destination.lat, "lng": destination.lng},
+        "route": route_result,
+        "expiresAt": (now() + timedelta(minutes=10)).isoformat(),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    signature = hmac.new(settings.secret_key.encode(), raw, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(raw + signature).decode().rstrip("="), payload["expiresAt"]
+
+
+def verify_route_token(token):
+    try:
+        packed = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+        raw, supplied = packed[:-32], packed[-32:]
+        expected = hmac.new(settings.secret_key.encode(), raw, hashlib.sha256).digest()
+        require(hmac.compare_digest(supplied, expected), "Invalid route proof", 409)
+        payload = json.loads(raw)
+        require(datetime.fromisoformat(payload["expiresAt"]) > now(), "Route calculation expired", 409)
+        return payload
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        raise AppError("Invalid route proof", 409) from exc
 
 
 async def provider_request(method, url, **kwargs):
@@ -160,9 +190,11 @@ async def route(data):
             coordinates.extend(points[1:] if coordinates else points)
     require(len(coordinates) >= 2, "Routing provider returned no route geometry", 503)
     summary = trip.get("summary", {})
-    return {
+    route_result = {
         "distanceKm": round(float(summary.get("length", 0)), 1),
         "durationMin": round(float(summary.get("time", 0)) / 60),
         "geometry": {"type": "LineString", "coordinates": coordinates},
         "provider": "valhalla",
     }
+    token, expires_at = _route_token(route_result, data.origin, data.destination)
+    return {**route_result, "routeToken": token, "expiresAt": expires_at}

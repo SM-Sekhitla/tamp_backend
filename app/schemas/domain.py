@@ -209,6 +209,16 @@ class Command(Input):
     loadId: str
     truckId: str | None = None
     proof: ProofInput | None = None
+    offerId: str | None = Field(default=None, max_length=80)
+    revision: int | None = Field(default=None, ge=1)
+    termsHash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class OfferPrepare(Input):
+    loadId: str = Field(max_length=80)
+    truckId: str = Field(max_length=80)
+    journeyRouteToken: str = Field(max_length=500000)
+    deadheadRouteToken: str | None = Field(default=None, max_length=500000)
 
 
 class Delta(Input):

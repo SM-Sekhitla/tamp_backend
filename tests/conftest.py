@@ -16,6 +16,7 @@ os.environ.update(
     DEV_EMAIL_CODES="true",
     AUTH_RATE_LIMIT="1000",
     RATE_LIMIT="10000",
+    GEOCODING_PROVIDER="local",
 )
 
 from app.controllers.auth import create_party

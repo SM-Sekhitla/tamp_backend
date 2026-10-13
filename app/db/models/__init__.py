@@ -48,6 +48,8 @@ for name in [
     "loads",
     "trucks",
     "matches",
+    "route_quotes",
+    "match_offers",
     "trips",
     "ratings",
     "disputes",
@@ -70,6 +72,8 @@ for name in [
     }
     refs = {
         "matches": {"load_id": "loads", "truck_id": "trucks"},
+        "route_quotes": {"load_id": "loads", "truck_id": "trucks", "match_id": "matches"},
+        "match_offers": {"match_id": "matches"},
         "trips": {"match_id": "matches"},
         "ratings": {"trip_id": "trips"},
         "disputes": {"trip_id": "trips"},
@@ -87,6 +91,12 @@ Index(
     MODELS["matches"].load_id,
     unique=True,
     postgresql_where=text("data->>'status' IN ('ACCEPTED', 'CONFIRMED')"),
+)
+Index(
+    "one_offer_revision_per_match",
+    MODELS["match_offers"].match_id,
+    text("(data->>'revision')"),
+    unique=True,
 )
 Index("one_active_trip_per_truck_match", MODELS["trips"].match_id, unique=True)
 Index(

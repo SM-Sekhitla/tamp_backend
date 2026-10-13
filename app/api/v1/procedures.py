@@ -51,8 +51,8 @@ group(
 group(
     "commands",
     [
-        (n, d.Command, True, False)
-        for n in ["advanceTrip", "acceptMatch", "confirmMatch", "acceptRequest"]
+        (n, d.OfferPrepare if n == "prepareOffer" else d.Command, True, False)
+        for n in ["prepareOffer", "advanceTrip", "acceptMatch", "confirmMatch", "acceptRequest"]
     ],
 )
 group("snapshot", [("load", a.Empty, False, False), ("sync", d.Delta, True, False)])
