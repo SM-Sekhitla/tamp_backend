@@ -3,7 +3,7 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -17,6 +17,7 @@ from app.core.errors import AppError, require
 from app.db.session import get_session
 from app.services.records import needed
 from app.services.storage import store
+from app.schemas.tracking import PositionInput
 
 router = APIRouter()
 logger = logging.getLogger("tamp.api")
@@ -31,6 +32,75 @@ async def health():
 async def ready(db: AsyncSession = Depends(get_session)):
     await db.execute(text("SELECT 1"))
     return {"status": "ok", "database": "postgresql"}
+
+
+@router.post("/api/v1/tracking/trips/{trip_id}/positions", tags=["tracking"])
+async def record_vehicle_position(
+    trip_id: str,
+    payload: PositionInput,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.live_tracking import hub, save_position
+
+    party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    position = await save_position(db, trip_id, party, payload)
+    await db.commit()
+    await hub.publish(trip_id, position)
+    return position
+
+
+@router.get("/api/v1/tracking/trips/{trip_id}/positions/latest", tags=["tracking"])
+async def latest_vehicle_position(
+    trip_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.live_tracking import latest_position
+
+    party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    return await latest_position(db, trip_id, party)
+
+
+@router.get("/api/v1/tracking/trips/{trip_id}/positions", tags=["tracking"])
+async def vehicle_position_history(
+    trip_id: str,
+    request: Request,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.live_tracking import position_history
+
+    require(1 <= limit <= 500, "Limit must be between 1 and 500", 400)
+    party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    return await position_history(db, trip_id, party, limit)
+
+
+@router.websocket("/api/v1/tracking/trips/{trip_id}/live")
+async def live_vehicle_position(websocket: WebSocket, trip_id: str):
+    from app.services.live_tracking import authorize_view, hub, latest_position, websocket_party
+    from app.db.session import AsyncSessionLocal
+
+    try:
+        origin = websocket.headers.get("origin")
+        require(origin in settings.cors_origins, "WebSocket origin is not allowed", 403)
+        async with AsyncSessionLocal() as db:
+            party = await websocket_party(db, websocket)
+            await authorize_view(db, trip_id, party)
+            latest = await latest_position(db, trip_id, party)
+        await websocket.accept()
+        await hub.add(trip_id, websocket)
+        if latest:
+            await websocket.send_json({"type": "position", "position": latest})
+        while True:
+            # Clients send a small keepalive message; location updates flow from
+            # authenticated HTTP ingestion to every connected viewer.
+            await websocket.receive_text()
+    except (AppError, WebSocketDisconnect):
+        if websocket.client_state.name == "CONNECTING":
+            await websocket.close(code=4401)
+    finally:
+        await hub.remove(trip_id, websocket)
 
 
 @router.get("/api/v1/capabilities")
