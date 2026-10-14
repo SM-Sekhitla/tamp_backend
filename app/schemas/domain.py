@@ -203,6 +203,8 @@ class Proof(ProofInput):
     tripId: str
     loadId: str
     capturedAt: str
+    kind: Literal["PICKUP", "DELIVERY"] = "DELIVERY"
+    location: dict | None = None
 
 
 class Command(Input):

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from app.core.security import now
 from app.services.maps import _route_token
 
-from .conftest import login, result, rpc
+from .conftest import db_call, login, result, rpc
 
 PLACE = {"label": "Johannesburg", "province": "GP", "lat": -26.2041, "lng": 28.0473}
 DEST = {"label": "Pretoria", "province": "GP", "lat": -25.7479, "lng": 28.2293}
@@ -123,11 +123,56 @@ def test_complete_freight_lifecycle(client, accounts):
     trip_id = result(rpc(client, "commands.confirmMatch", {"loadId": load["id"], **proof}, True))["tripId"]
     assert rpc(client, "commands.confirmMatch", {"loadId": load["id"]}, True).status_code == 409
     login(client, "driver")
-    for status in ["AT_PICKUP", "LOADED", "IN_TRANSIT", "AT_DROPOFF"]:
-        assert (
-            result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"]
-            == status
+    assert (
+        result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"]
+        == "EN_ROUTE_PICKUP"
+    )
+
+    def enter_zone(db, zone):
+        from app.db.models import VehiclePosition
+        from app.services.records import needed
+
+        row = needed(db, "trips", trip_id)
+        row.data = {
+            **row.data,
+            "geofences": {
+                **row.data.get("geofences", {}),
+                zone: {"inside": True, "distanceM": 10, "enteredAt": now().isoformat()},
+            },
+        }
+        point = PLACE if zone == "PICKUP" else DEST
+        db.add(
+            VehiclePosition(
+                trip_id=trip_id,
+                truck_id=truck["id"],
+                reported_by=accounts["driver"]["id"],
+                recorded_at=now(),
+                received_at=now(),
+                lat=point["lat"],
+                lng=point["lng"],
+                accuracy_m=10,
+            )
         )
+
+    db_call(lambda db: enter_zone(db, "PICKUP"))
+    assert result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"] == "AT_PICKUP"
+    assert (
+        result(
+            rpc(
+                client,
+                "commands.advanceTrip",
+                {"loadId": load["id"], "proof": {"recipientName": "Pickup Contact"}},
+                True,
+            )
+        )["status"]
+        == "LOADED"
+    )
+    assert result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"] == "IN_TRANSIT"
+    db_call(lambda db: enter_zone(db, "DESTINATION"))
+    assert (
+        result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"]
+        == "AT_DROPOFF"
+    )
     assert rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True).status_code == 400
     assert (
         result(

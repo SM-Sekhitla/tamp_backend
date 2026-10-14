@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     valhalla_url: str = "https://valhalla1.openstreetmap.de"
     match_offer_minutes: int = 30
     tracking_retention_days: int = 30
+    geofence_radius_m: int = 250
+    geofence_exit_radius_m: int = 350
     upload_path: str = "storage/uploads"
     max_upload_bytes: int = 10 * 1024 * 1024
     max_account_upload_bytes: int = 100 * 1024 * 1024

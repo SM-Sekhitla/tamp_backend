@@ -205,7 +205,7 @@ def sync(db, party, delta):
     lock_domain(db)
     changes = delta.upserts
     # Server-owned records cannot be authored through the legacy delta API.
-    for k in ["trips", "acceptances"]:
+    for k in ["trips", "acceptances", "proofs"]:
         for d in changes.get(k, []):
             old = needed(db, k, d.get("id")).data
             allowed = snapshot(db, party)[k]
@@ -226,7 +226,6 @@ def sync(db, party, delta):
         "disputes",
         "fuelLogs",
         "maintenance",
-        "proofs",
     ]:
         for raw in changes.get(k, []):
             data = (

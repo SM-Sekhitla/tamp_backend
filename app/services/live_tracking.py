@@ -11,6 +11,7 @@ from app.api.deps import is_admin
 from app.core.errors import AppError, require
 from app.core.config import settings
 from app.core.security import now, token_hash
+from app.core.security import new_id
 from app.db.models import MODELS, Party, Session, VehiclePosition
 
 
@@ -47,6 +48,82 @@ class PositionHub:
 
 
 hub = PositionHub()
+
+
+def distance_metres(a: dict, lat: float, lng: float):
+    lat1, lat2 = math.radians(a["lat"]), math.radians(lat)
+    dlat = lat2 - lat1
+    dlng = math.radians(lng - a["lng"])
+    value = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    return 6371000 * 2 * math.asin(min(1, math.sqrt(value)))
+
+
+async def add_notification(db: AsyncSession, owner_id: str, load_id: str, title: str, detail: str):
+    model = MODELS["notifications"]
+    body = {
+        "id": new_id("NT"),
+        "title": title,
+        "detail": detail,
+        "at": now().isoformat(),
+        "unread": True,
+        "tone": "info",
+        "subjectType": "LOAD",
+        "subjectId": load_id,
+    }
+    db.add(model(id=body["id"], owner_id=owner_id, data=body))
+
+
+async def update_geofences(db: AsyncSession, trip_row, truck: dict, load: dict, lat: float, lng: float, at):
+    trip = dict(trip_row.data)
+    states = dict(trip.get("geofences") or {})
+    events = list(trip.get("geofenceEvents") or [])
+    transition = None
+    for zone, place in (("PICKUP", load["origin"]), ("DESTINATION", load["destination"])):
+        distance_m = round(distance_metres(place, lat, lng))
+        state = dict(states.get(zone) or {"inside": False})
+        entered = not state.get("inside") and distance_m <= settings.geofence_radius_m
+        exited = state.get("inside") and distance_m >= settings.geofence_exit_radius_m
+        if not entered and not exited:
+            state["distanceM"] = distance_m
+            states[zone] = state
+            continue
+        event_type = "ENTERED" if entered else "EXITED"
+        event = {
+            "id": new_id("GF"),
+            "zone": zone,
+            "type": event_type,
+            "at": at.isoformat(),
+            "lat": lat,
+            "lng": lng,
+            "distanceM": distance_m,
+        }
+        events.append(event)
+        state.update(
+            inside=entered,
+            distanceM=distance_m,
+            **({"enteredAt": event["at"]} if entered else {"exitedAt": event["at"]}),
+        )
+        states[zone] = state
+        transition = event
+        label = "pickup" if zone == "PICKUP" else "destination"
+        action = "entered" if entered else "left"
+        title = f"Vehicle {action} {label} geofence"
+        detail = f"Trip {trip['id']} {action} the {label} zone."
+        for recipient in {load["ownerId"], truck["transporterId"]}:
+            await add_notification(db, recipient, load["id"], title, detail)
+
+    suggestion = trip.get("suggestedAction")
+    if states.get("PICKUP", {}).get("inside") and trip["status"] == "EN_ROUTE_PICKUP":
+        suggestion = "AT_PICKUP"
+    elif states.get("DESTINATION", {}).get("inside") and trip["status"] == "IN_TRANSIT":
+        suggestion = "AT_DROPOFF"
+    trip_row.data = {
+        **trip,
+        "geofences": states,
+        "geofenceEvents": events[-100:],
+        "suggestedAction": suggestion,
+    }
+    return transition
 
 
 async def websocket_party(db: AsyncSession, websocket: WebSocket):
@@ -147,6 +224,11 @@ async def save_position(db: AsyncSession, trip_id: str, party, data):
     # Keep snapshots and public tracking links current while the normalized
     # history table remains the source of truth for location history.
     trip_row.data = {**trip_row.data, "simulatedPosition": {"lat": data.lat, "lng": data.lng, "updatedAt": recorded.isoformat()}}
+    geofence_event = await update_geofences(
+        db, trip_row, truck, _load_row.data, data.lat, data.lng, recorded
+    )
+    if geofence_event:
+        payload["geofenceEvent"] = geofence_event
     await db.flush()
     return payload
 

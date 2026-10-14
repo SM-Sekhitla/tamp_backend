@@ -3,17 +3,28 @@ import hmac
 import json
 from datetime import timedelta
 
+from sqlalchemy import select
+
 from app.core.client_ip import client_ip
 from app.core.config import settings
 from app.core.errors import require
 from app.core.security import iso, new_id, now
-from app.db.models import Party
+from app.db.models import Party, VehiclePosition
 from app.services.domain import audit, lock_domain, truck_access
 from app.services.matching import dt, score
 from app.services.maps import verify_route_token
 from app.services.records import needed, put, rows
 
-STEPS = ["SCHEDULED", "AT_PICKUP", "LOADED", "IN_TRANSIT", "AT_DROPOFF", "DELIVERED", "COMPLETED"]
+STEPS = [
+    "SCHEDULED",
+    "EN_ROUTE_PICKUP",
+    "AT_PICKUP",
+    "LOADED",
+    "IN_TRANSIT",
+    "AT_DROPOFF",
+    "DELIVERED",
+    "COMPLETED",
+]
 
 
 def stable_hash(value):
@@ -197,19 +208,52 @@ def handle(action, data, db, request, response, party):
     if action == "prepareOffer":
         return prepare_offer(db, party, load, truck, match, data)
     if action == "advanceTrip":
+        assigned_driver = truck.get("driverId")
         require(
-            truck_access(party, truck) and party.data["role"] in ["DRIVER", "TRANSPORTER"],
-            "Only the assigned driver or carrier can advance trips",
+            party.id == assigned_driver
+            if assigned_driver
+            else party.id == truck["transporterId"] and party.data["role"] == "TRANSPORTER",
+            "Only the assigned driver may advance this trip",
         )
         trip = next((r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]), None)
         require(trip is not None and trip["status"] in STEPS[:-1], "Trip cannot advance", 409)
         status = STEPS[STEPS.index(trip["status"]) + 1]
-        if status == "DELIVERED":
+        if status == "AT_PICKUP":
+            require(
+                trip.get("geofences", {}).get("PICKUP", {}).get("inside"),
+                "Enter the pickup geofence before confirming arrival",
+                409,
+            )
+        if status == "AT_DROPOFF":
+            require(
+                trip.get("geofences", {}).get("DESTINATION", {}).get("inside"),
+                "Enter the destination geofence before confirming arrival",
+                409,
+            )
+        if status in ["LOADED", "DELIVERED"]:
             proof = d.get("proof")
+            kind = "PICKUP" if status == "LOADED" else "DELIVERY"
+            zone = "PICKUP" if kind == "PICKUP" else "DESTINATION"
             require(
                 proof is not None and proof.get("recipientName", "").strip(),
-                "Proof of delivery requires a recipient",
+                f"Proof of {kind.lower()} requires a named contact",
                 400,
+            )
+            require(
+                trip.get("geofences", {}).get(zone, {}).get("inside"),
+                f"Proof of {kind.lower()} must be captured inside the {zone.lower()} geofence",
+                409,
+            )
+            latest = db.scalar(
+                select(VehiclePosition)
+                .where(VehiclePosition.trip_id == trip["id"])
+                .order_by(VehiclePosition.recorded_at.desc(), VehiclePosition.id.desc())
+                .limit(1)
+            )
+            require(
+                latest is not None and now() - latest.received_at <= timedelta(minutes=5),
+                "A recent verified GPS position is required for proof capture",
+                409,
             )
             if proof.get("photoUrl"):
                 from app.services.storage import own_upload
@@ -219,7 +263,19 @@ def handle(action, data, db, request, response, party):
                 db,
                 "proofs",
                 dict(
-                    **proof, id=new_id("PF"), tripId=trip["id"], loadId=load["id"], capturedAt=iso()
+                    **proof,
+                    id=new_id("PF"),
+                    tripId=trip["id"],
+                    loadId=load["id"],
+                    kind=kind,
+                    capturedAt=iso(),
+                    location={
+                        "lat": latest.lat,
+                        "lng": latest.lng,
+                        "accuracyM": latest.accuracy_m,
+                        "recordedAt": latest.recorded_at.isoformat(),
+                        "verified": True,
+                    },
                 ),
                 party.id,
             )
@@ -229,6 +285,7 @@ def handle(action, data, db, request, response, party):
             "status": status,
             "progressPct": progress,
             "events": [*trip["events"], {"status": status, "at": iso(), "byUserId": party.id}],
+            "suggestedAction": None,
         }
         put(db, "trips", trip)
         put(db, "trucks", {**truck, "status": "AVAILABLE" if status == "COMPLETED" else "ON_TRIP"})
@@ -339,6 +396,12 @@ def handle(action, data, db, request, response, party):
                 simulatedPosition=None,
                 progressPct=0,
                 etaAt=None,
+                geofences={
+                    "PICKUP": {"inside": False},
+                    "DESTINATION": {"inside": False},
+                },
+                geofenceEvents=[],
+                suggestedAction=None,
             ),
             load["ownerId"],
         )
