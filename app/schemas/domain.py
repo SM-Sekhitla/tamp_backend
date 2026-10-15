@@ -216,6 +216,18 @@ class Command(Input):
     termsHash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
+class IncidentReport(Input):
+    loadId: str = Field(max_length=80)
+    kind: Literal["DELAY", "BREAKDOWN", "ACCIDENT", "NO_SHOW", "CARGO_ISSUE", "ROUTE_OBSTRUCTION"]
+    description: str = Field(min_length=5, max_length=4000)
+    delayMinutes: int | None = Field(default=None, ge=5, le=1440)
+
+
+class TripCancellation(Input):
+    loadId: str = Field(max_length=80)
+    reason: str = Field(min_length=5, max_length=2000)
+
+
 class OfferPrepare(Input):
     loadId: str = Field(max_length=80)
     truckId: str = Field(max_length=80)
@@ -242,6 +254,7 @@ class Delta(Input):
             "fuelLogs",
             "maintenance",
             "proofs",
+            "incidents",
         }
         if (set(self.upserts) | set(self.deleteIds)) - allowed or sum(
             map(len, self.upserts.values())

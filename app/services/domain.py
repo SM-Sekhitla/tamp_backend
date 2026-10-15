@@ -23,6 +23,7 @@ COLLECTIONS = [
     "fuelLogs",
     "maintenance",
     "proofs",
+    "incidents",
 ]
 
 
@@ -118,7 +119,7 @@ def snapshot(db, party):
                 "matches": matches,
                 "trips": trips,
             }.get(k, set())
-            if k in {"ratings", "disputes", "proofs"}:
+            if k in {"ratings", "disputes", "proofs", "incidents"}:
                 visible = d["tripId"] in trips
             if k == "acceptances":
                 visible = d["matchId"] in matches
@@ -205,7 +206,7 @@ def sync(db, party, delta):
     lock_domain(db)
     changes = delta.upserts
     # Server-owned records cannot be authored through the legacy delta API.
-    for k in ["trips", "acceptances", "proofs"]:
+    for k in ["trips", "acceptances", "proofs", "incidents"]:
         for d in changes.get(k, []):
             old = needed(db, k, d.get("id")).data
             allowed = snapshot(db, party)[k]

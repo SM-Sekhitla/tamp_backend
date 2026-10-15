@@ -10,9 +10,9 @@ from app.core.config import settings
 from app.core.errors import require
 from app.core.security import iso, new_id, now
 from app.db.models import Party, VehiclePosition
-from app.services.domain import audit, lock_domain, truck_access
-from app.services.matching import dt, score
+from app.services.domain import audit, lock_domain
 from app.services.maps import verify_route_token
+from app.services.matching import dt, score
 from app.services.records import needed, put, rows
 
 STEPS = [
@@ -207,6 +207,117 @@ def handle(action, data, db, request, response, party):
     truck = needed(db, "trucks", match["truckPostingId"], True).data
     if action == "prepareOffer":
         return prepare_offer(db, party, load, truck, match, data)
+    if action in ["reportIncident", "cancelTrip"]:
+        trip = next(
+            (r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]),
+            None,
+        )
+        require(trip is not None, "Trip not found", 404)
+        require(trip["status"] not in ["DELIVERED", "COMPLETED", "CANCELLED"], "Trip is closed", 409)
+        assigned = party.id == truck.get("driverId")
+        carrier = party.id == truck["transporterId"]
+        owner = party.id == load["ownerId"]
+        require(
+            assigned or carrier or owner,
+            "Only a trip party may report an operational issue",
+        )
+        if action == "cancelTrip":
+            require(owner or carrier, "Only the load owner or carrier may cancel this trip")
+            kind, description = "CANCELLATION", d["reason"].strip()
+        else:
+            kind, description = d["kind"], d["description"].strip()
+            if kind == "DELAY":
+                require(d.get("delayMinutes") is not None, "Delay duration is required", 400)
+            if kind == "NO_SHOW":
+                entered = trip.get("geofences", {}).get("PICKUP", {}).get("enteredAt")
+                require(
+                    entered and now() - dt(entered) >= timedelta(minutes=30),
+                    "No-show requires 30 minutes in the pickup geofence",
+                    409,
+                )
+        latest = db.scalar(
+            select(VehiclePosition)
+            .where(VehiclePosition.trip_id == trip["id"])
+            .order_by(VehiclePosition.recorded_at.desc())
+            .limit(1)
+        )
+        incident = dict(
+            id=new_id("IN"),
+            tripId=trip["id"],
+            loadId=load["id"],
+            truckId=truck["id"],
+            kind=kind,
+            description=description,
+            status="OPEN",
+            delayMinutes=d.get("delayMinutes"),
+            reportedById=party.id,
+            reportedByRole=party.data["role"],
+            reportedAt=iso(),
+            location=(
+                {
+                    "lat": latest.lat,
+                    "lng": latest.lng,
+                    "recordedAt": latest.recorded_at.isoformat(),
+                }
+                if latest
+                else None
+            ),
+        )
+        put(db, "incidents", incident, party.id)
+        counterpart_ids = {load["ownerId"], truck["transporterId"]} - {party.id}
+        if truck.get("driverId"):
+            counterpart_ids.add(truck["driverId"])
+            counterpart_ids.discard(party.id)
+        if action == "cancelTrip":
+            before_pickup = trip["status"] in ["SCHEDULED", "EN_ROUTE_PICKUP", "AT_PICKUP"]
+            put(
+                db,
+                "trips",
+                {
+                    **trip,
+                    "status": "CANCELLED",
+                    "operationalStatus": "CANCELLED",
+                    "activeIncidentIds": [
+                        *trip.get("activeIncidentIds", []),
+                        incident["id"],
+                    ],
+                    "events": [
+                        *trip["events"],
+                        {"status": "CANCELLED", "at": iso(), "byUserId": party.id},
+                    ],
+                },
+            )
+            put(db, "matches", {**match, "status": "WITHDRAWN"})
+            put(
+                db,
+                "loads",
+                {**load, "status": "POSTED" if carrier and before_pickup else "CANCELLED"},
+            )
+            put(db, "trucks", {**truck, "status": "AVAILABLE" if before_pickup else "OFFLINE"})
+            event, title = "TRIP_CANCELLED", "Trip cancelled"
+        else:
+            op = "DELAYED" if kind in ["DELAY", "ROUTE_OBSTRUCTION"] else "ACTION_REQUIRED"
+            eta = trip.get("etaAt")
+            if eta and d.get("delayMinutes"):
+                eta = (dt(eta) + timedelta(minutes=d["delayMinutes"])).isoformat()
+            put(
+                db,
+                "trips",
+                {
+                    **trip,
+                    "operationalStatus": op,
+                    "activeIncidentIds": [
+                        *trip.get("activeIncidentIds", []),
+                        incident["id"],
+                    ],
+                    "etaAt": eta,
+                },
+            )
+            event, title = "TRIP_INCIDENT_REPORTED", f"{kind.replace('_', ' ').title()} reported"
+        audit(db, party, event, "TRIP", trip["id"], description)
+        for recipient in counterpart_ids:
+            notify(db, recipient, load["id"], title)
+        return {"ok": True, "incidentId": incident["id"]}
     if action == "advanceTrip":
         assigned_driver = truck.get("driverId")
         require(

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, JSON, DateTime, Float, ForeignKey, Index, Integer, String, text
+from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -74,6 +74,7 @@ for name in [
     "fuelLogs",
     "maintenance",
     "proofs",
+    "incidents",
     "notifications",
     "uploads",
     "webhooks",
@@ -95,6 +96,7 @@ for name in [
         "acceptances": {"match_id": "matches"},
         "reservations": {"load_id": "loads", "truck_id": "trucks"},
         "proofs": {"load_id": "loads", "trip_id": "trips"},
+        "incidents": {"load_id": "loads", "trip_id": "trips"},
         "fuelLogs": {"truck_id": "trucks"},
         "maintenance": {"truck_id": "trucks"},
     }

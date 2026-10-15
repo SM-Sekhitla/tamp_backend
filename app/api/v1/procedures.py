@@ -53,6 +53,9 @@ group(
     [
         (n, d.OfferPrepare if n == "prepareOffer" else d.Command, True, False)
         for n in ["prepareOffer", "advanceTrip", "acceptMatch", "confirmMatch", "acceptRequest"]
+    ] + [
+        ("reportIncident", d.IncidentReport, True, False),
+        ("cancelTrip", d.TripCancellation, True, False),
     ],
 )
 group("snapshot", [("load", a.Empty, False, False), ("sync", d.Delta, True, False)])
