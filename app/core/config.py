@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     quote_base_zar: float = 500
     quote_per_km_zar: float = 12
     quote_per_tonne_km_zar: float = 0.35
+    platform_commission_rate: float = 0.10
+    invoice_due_days: int = 7
     rate_limit: int = 240
     auth_rate_limit: int = 15
     webhook_allowed_hosts: list[str] = []

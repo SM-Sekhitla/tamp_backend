@@ -244,6 +244,13 @@ class IncidentAction(Input):
     etaMinutes: int | None = Field(default=None, ge=5, le=1440)
 
 
+class InvoiceAction(Input):
+    invoiceId: str = Field(max_length=80)
+    action: Literal["RECORD_PAYMENT", "RELEASE_PAYOUT", "VOID"]
+    reference: str = Field(min_length=3, max_length=200)
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class OfferPrepare(Input):
     loadId: str = Field(max_length=80)
     truckId: str = Field(max_length=80)
@@ -271,6 +278,8 @@ class Delta(Input):
             "maintenance",
             "proofs",
             "incidents",
+            "invoices",
+            "transactions",
         }
         if (set(self.upserts) | set(self.deleteIds)) - allowed or sum(
             map(len, self.upserts.values())

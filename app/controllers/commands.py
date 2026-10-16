@@ -402,6 +402,17 @@ def handle(action, data, db, request, response, party):
         put(db, "trucks", {**truck, "status": "AVAILABLE" if status == "COMPLETED" else "ON_TRIP"})
         if status == "COMPLETED":
             put(db, "loads", {**load, "status": "COMPLETED"})
+            from app.services.finance import ensure_invoice_for_trip
+
+            invoice = ensure_invoice_for_trip(db, trip, load, truck, match)
+            audit(
+                db,
+                party,
+                "INVOICE_ISSUED",
+                "INVOICE",
+                invoice["id"],
+                f"{invoice['invoiceNumber']} issued for ZAR {invoice['total']:.2f}",
+            )
         audit(db, party, "TRIP_STATUS_CHANGED", "TRIP", trip["id"], status)
         notify(db, load["ownerId"], load["id"], f"Trip {status.lower().replace('_', ' ')}")
         return {"ok": True, "status": status, "progressPct": progress}

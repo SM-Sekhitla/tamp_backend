@@ -24,6 +24,8 @@ COLLECTIONS = [
     "maintenance",
     "proofs",
     "incidents",
+    "invoices",
+    "transactions",
 ]
 
 
@@ -110,6 +112,7 @@ def snapshot(db, party):
             loads.add(m["loadId"])
             trucks.add(m["truckPostingId"])
     trips = {d["id"] for d in all_rows["trips"] if d["matchId"] in matches}
+    invoices = {d["id"] for d in all_rows["invoices"] if d["tripId"] in trips}
     result = {k: [] for k in COLLECTIONS}
     for k, ds in all_rows.items():
         for d in ds:
@@ -121,6 +124,10 @@ def snapshot(db, party):
             }.get(k, set())
             if k in {"ratings", "disputes", "proofs", "incidents"}:
                 visible = d["tripId"] in trips
+            if k == "invoices":
+                visible = d["id"] in invoices
+            if k == "transactions":
+                visible = d["invoiceId"] in invoices
             if k == "acceptances":
                 visible = d["matchId"] in matches
             if k == "reservations":
@@ -206,7 +213,7 @@ def sync(db, party, delta):
     lock_domain(db)
     changes = delta.upserts
     # Server-owned records cannot be authored through the legacy delta API.
-    for k in ["trips", "acceptances", "proofs", "incidents"]:
+    for k in ["trips", "acceptances", "proofs", "incidents", "invoices", "transactions"]:
         for d in changes.get(k, []):
             old = needed(db, k, d.get("id")).data
             allowed = snapshot(db, party)[k]

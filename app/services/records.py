@@ -31,6 +31,7 @@ def put(db, kind, data, owner=None):
         "truck_id": "truckPostingId" if kind == "matches" else "truckId",
         "trip_id": "tripId",
         "match_id": "matchId",
+        "invoice_id": "invoiceId",
     }.items():
         if hasattr(type(row), column):
             setattr(row, column, data[key])
