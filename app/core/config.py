@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     rate_limit: int = 240
     auth_rate_limit: int = 15
     webhook_allowed_hosts: list[str] = []
+    log_path: str = "logs"
+    log_max_bytes: int = 5 * 1024 * 1024
+    log_backup_count: int = 5
 
     @model_validator(mode="after")
     def production(self):

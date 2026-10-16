@@ -15,10 +15,13 @@ from sqlalchemy import select
 
 from app.controllers.webhooks import cipher
 from app.core.config import settings
+from app.core.logging import configure_file_logging
 from app.core.security import now
 from app.db.models import MODELS
 from app.db.session import AsyncSessionLocal
 from app.services.records import get
+
+logger = logging.getLogger("tamp.webhook_worker")
 
 
 def deliver(url, body, secret, ident):
@@ -103,10 +106,11 @@ async def main():
             if not await tick():
                 await asyncio.sleep(2)
         except Exception:
-            logging.exception("Webhook worker failed")
+            logger.exception("Webhook worker failed")
             await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    configure_file_logging()
     asyncio.run(main())

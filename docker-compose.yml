@@ -32,6 +32,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
     volumes:
       - uploads:/app/storage/uploads
+      - backend_logs:/app/logs
     ports:
       - "127.0.0.1:${BACKEND_PORT:-5000}:5000"
     depends_on:
@@ -49,6 +50,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://tamp:${POSTGRES_PASSWORD}@postgres:5432/tamp
     command: ["python", "-m", "app.services.webhook_worker"]
+    volumes:
+      - backend_logs:/app/logs
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -56,6 +59,7 @@ services:
 volumes:
   postgres_data:
   uploads:
+  backend_logs:
 
 networks:
   tamp:

@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.api.v1.router import router
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.logging import configure_file_logging
 from app.db.session import engine
 from app.middleware.body_limit import BodyLimitMiddleware
 from app.middleware.csrf import CsrfMiddleware
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
 
 def create_app():
     logging.basicConfig(level=logging.INFO)
+    configure_file_logging()
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",

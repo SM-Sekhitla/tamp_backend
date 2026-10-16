@@ -3,7 +3,17 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -15,9 +25,9 @@ from app.api.v1.procedures import REGISTRY, dispatch
 from app.core.config import settings
 from app.core.errors import AppError, require
 from app.db.session import get_session
+from app.schemas.tracking import PositionInput
 from app.services.records import needed
 from app.services.storage import store
-from app.schemas.tracking import PositionInput
 
 router = APIRouter()
 logger = logging.getLogger("tamp.api")
@@ -78,8 +88,8 @@ async def vehicle_position_history(
 
 @router.websocket("/api/v1/tracking/trips/{trip_id}/live")
 async def live_vehicle_position(websocket: WebSocket, trip_id: str):
-    from app.services.live_tracking import authorize_view, hub, latest_position, websocket_party
     from app.db.session import AsyncSessionLocal
+    from app.services.live_tracking import authorize_view, hub, latest_position, websocket_party
 
     try:
         origin = websocket.headers.get("origin")
@@ -113,13 +123,63 @@ async def capabilities():
     }
 
 
+async def admin_party(db: AsyncSession, request: Request):
+    party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    require(is_admin(party), "Administrator access is required", 403)
+    return party
+
+
+@router.get("/api/v1/system-logs", tags=["admin"])
+async def system_log_index(request: Request, db: AsyncSession = Depends(get_session)):
+    from app.services.system_logs import browse
+
+    await admin_party(db, request)
+    return browse()
+
+
+@router.get("/api/v1/system-logs/{group}/{filename}/content", tags=["admin"])
+async def system_log_content(
+    group: str,
+    filename: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.system_logs import resolve_log, tail
+
+    await admin_party(db, request)
+    return tail(resolve_log(group, filename))
+
+
+@router.get("/api/v1/system-logs/{group}/{filename}/download", tags=["admin"])
+async def download_system_log(
+    group: str,
+    filename: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.system_logs import resolve_log
+
+    await admin_party(db, request)
+    path = resolve_log(group, filename)
+    return FileResponse(path, media_type="text/plain", filename=filename)
+
+
 def _execute_sync(sync_db, name, payload, method, request, response):
     procedure = REGISTRY.get(name)
     require(procedure is not None, "Procedure not found", 404)
     require(method == ("POST" if procedure.mutation else "GET"), "Method not allowed", 405)
     data = procedure.schema.model_validate(payload or {})
     party = current_party(sync_db, request, not procedure.public)
-    return dispatch(name, data, sync_db, request, response, party)
+    module = name.split(".", 1)[0]
+    module_logger = logging.getLogger(f"tamp.module.{module}")
+    actor = party.id if party else "public"
+    try:
+        result = dispatch(name, data, sync_db, request, response, party)
+        module_logger.info("OK procedure=%s method=%s actor=%s", name, method, actor)
+        return result
+    except Exception:
+        module_logger.exception("FAILED procedure=%s method=%s actor=%s", name, method, actor)
+        raise
 
 
 async def execute(name, payload, method, db, request, response):
