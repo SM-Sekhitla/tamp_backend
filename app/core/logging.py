@@ -15,6 +15,7 @@ MODULE_LOGGERS = {
     "routes": "tamp.module.routes",
     "webhooks": "tamp.module.webhooks",
     "snapshot": "tamp.module.snapshot",
+    "operations": "tamp.module.operations",
 }
 
 SERVICE_LOGGERS = {

@@ -228,6 +228,22 @@ class TripCancellation(Input):
     reason: str = Field(min_length=5, max_length=2000)
 
 
+class IncidentAction(Input):
+    incidentId: str = Field(max_length=80)
+    action: Literal[
+        "ACKNOWLEDGE",
+        "ASSIGN",
+        "BEGIN_RESOLUTION",
+        "RESOLVE",
+        "RESUME_TRIP",
+        "REOPEN_LOAD",
+        "UPDATE_ETA",
+    ]
+    assigneeId: str | None = Field(default=None, max_length=80)
+    note: str | None = Field(default=None, max_length=4000)
+    etaMinutes: int | None = Field(default=None, ge=5, le=1440)
+
+
 class OfferPrepare(Input):
     loadId: str = Field(max_length=80)
     truckId: str = Field(max_length=80)

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.controllers import auth, commands, parties, utilities, webhooks
+from app.controllers import auth, commands, operations, parties, utilities, webhooks
 from app.schemas import auth as a
 from app.schemas import domain as d
 from app.services.domain import snapshot, sync
@@ -60,6 +60,7 @@ group(
 )
 group("snapshot", [("load", a.Empty, False, False), ("sync", d.Delta, True, False)])
 group("loads", [("list", a.Empty, False, False), ("create", d.LoadInput, True, False)])
+group("operations", [("incidentAction", d.IncidentAction, True, False)])
 group("email", [("sendCode", a.Email, True, True)])
 group("phone", [("check", d.Phone, False, True)])
 group(
@@ -107,7 +108,13 @@ def dispatch(name, data, db, request, response, party):
             else tracking.view(db, data.token)
         )
     prefix, action = name.split(".")
-    controllers = {"auth": auth, "parties": parties, "commands": commands, "webhooks": webhooks}
+    controllers = {
+        "auth": auth,
+        "parties": parties,
+        "commands": commands,
+        "operations": operations,
+        "webhooks": webhooks,
+    }
     if prefix in controllers:
         return controllers[prefix].handle(action, data, db, request, response, party)
     if name == "snapshot.load":
