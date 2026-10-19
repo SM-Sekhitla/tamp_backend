@@ -297,9 +297,14 @@ def sync(db, party, delta):
                     )
                 if data.get("driverId"):
                     driver = db.get(Party, data["driverId"])
+                    owner_driver = (
+                        driver is not None
+                        and driver.id == data["transporterId"]
+                        and driver.data["role"] == "TRANSPORTER"
+                    )
                     require(
                         driver is not None
-                        and driver.data["role"] == "DRIVER"
+                        and (driver.data["role"] == "DRIVER" or owner_driver)
                         and driver.data["verification"] == "VERIFIED",
                         "Choose a verified driver",
                         400,

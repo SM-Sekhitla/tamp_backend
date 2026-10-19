@@ -30,14 +30,29 @@ def handle(action, data, db, request, response, party):
         require(party.id == truck["transporterId"], "Only the carrier may dispatch this job", 403)
         require(values.get("driverEmail"), "Driver email is required", 400)
         driver = find_email(db, values["driverEmail"])
-        require(driver is not None and driver.data["role"] == "DRIVER" and driver.data["verification"] == "VERIFIED", "Verified driver not found", 404)
+        owner_driver = (
+            driver is not None
+            and driver.id == party.id
+            and party.id == truck["transporterId"]
+            and driver.data["role"] == "TRANSPORTER"
+        )
+        require(
+            driver is not None
+            and (driver.data["role"] == "DRIVER" or owner_driver)
+            and driver.data["verification"] == "VERIFIED",
+            "Verified driver not found",
+            404,
+        )
         if current:
             put(db, "dispatches", {**current, "status": "CANCELLED", "cancelledAt": iso(), "cancelledById": party.id})
-        dispatch = {"id": new_id("DP"), "tripId": trip["id"], "loadId": load["id"], "truckId": truck["id"], "carrierId": party.id, "driverId": driver.id, "status": "OFFERED", "offeredAt": iso(), "respondedAt": None, "note": values.get("note"), "timeline": [{"status": "OFFERED", "at": iso(), "byUserId": party.id}]}
+        status = "ACCEPTED" if owner_driver else "OFFERED"
+        now = iso()
+        dispatch = {"id": new_id("DP"), "tripId": trip["id"], "loadId": load["id"], "truckId": truck["id"], "carrierId": party.id, "driverId": driver.id, "status": status, "offeredAt": now, "respondedAt": now if owner_driver else None, "note": values.get("note"), "timeline": [{"status": status, "at": now, "byUserId": party.id}]}
         put(db, "dispatches", dispatch, party.id)
         put(db, "trucks", {**truck, "driverId": driver.id})
-        put(db, "trips", {**trip, "dispatchStatus": "AWAITING_DRIVER", "assignedDriverId": driver.id})
-        notify(db, driver.id, trip["id"], "New delivery assignment", f"{load['origin']['label']} to {load['destination']['label']}")
+        put(db, "trips", {**trip, "dispatchStatus": "ASSIGNED" if owner_driver else "AWAITING_DRIVER", "assignedDriverId": driver.id})
+        if not owner_driver:
+            notify(db, driver.id, trip["id"], "New delivery assignment", f"{load['origin']['label']} to {load['destination']['label']}")
     else:
         require(current is not None, "Active dispatch not found", 404)
         if operation in ["ACCEPT", "DECLINE"]:
