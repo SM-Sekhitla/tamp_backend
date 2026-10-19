@@ -251,6 +251,13 @@ class InvoiceAction(Input):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class DispatchAction(Input):
+    tripId: str = Field(max_length=80)
+    action: Literal["ASSIGN", "ACCEPT", "DECLINE", "CANCEL"]
+    driverEmail: str | None = Field(default=None, max_length=254)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class OfferPrepare(Input):
     loadId: str = Field(max_length=80)
     truckId: str = Field(max_length=80)
@@ -280,6 +287,7 @@ class Delta(Input):
             "incidents",
             "invoices",
             "transactions",
+            "dispatches",
         }
         if (set(self.upserts) | set(self.deleteIds)) - allowed or sum(
             map(len, self.upserts.values())

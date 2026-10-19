@@ -239,6 +239,21 @@ def test_complete_freight_lifecycle(client, accounts):
     assert result(rpc(client, "notifications.unreadCount")) == 0
 
 
+def test_driver_dispatch_requires_acceptance(client, accounts):
+    load, truck, _match = setup_match(client, accounts)
+    proof = prepare_offer(client, load, truck)
+    result(rpc(client, "commands.acceptMatch", {"loadId": load["id"], "truckId": truck["id"], **proof}, True))
+    login(client, "carrier")
+    trip_id = result(rpc(client, "commands.confirmMatch", {"loadId": load["id"], **proof}, True))["tripId"]
+    assigned = result(rpc(client, "dispatch.action", {"tripId": trip_id, "action": "ASSIGN", "driverEmail": "driver@example.com", "note": "Collect at gate 2"}, True))
+    assert assigned["dispatch"]["status"] == "OFFERED"
+    login(client, "driver")
+    assert rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True).status_code == 409
+    accepted = result(rpc(client, "dispatch.action", {"tripId": trip_id, "action": "ACCEPT"}, True))
+    assert accepted["dispatch"]["status"] == "ACCEPTED"
+    assert result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"] == "EN_ROUTE_PICKUP"
+
+
 def test_ownership_server_fields_and_atomicity(client, accounts):
     load, truck, match = setup_match(client, accounts)
     login(client, "other")

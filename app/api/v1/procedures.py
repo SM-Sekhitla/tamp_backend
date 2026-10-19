@@ -1,6 +1,15 @@
 from dataclasses import dataclass
 
-from app.controllers import auth, commands, finance, operations, parties, utilities, webhooks
+from app.controllers import (
+    auth,
+    commands,
+    finance,
+    operations,
+    parties,
+    utilities,
+    webhooks,
+)
+from app.controllers import dispatch as dispatch_controller
 from app.schemas import auth as a
 from app.schemas import domain as d
 from app.services.domain import snapshot, sync
@@ -62,6 +71,7 @@ group("snapshot", [("load", a.Empty, False, False), ("sync", d.Delta, True, Fals
 group("loads", [("list", a.Empty, False, False), ("create", d.LoadInput, True, False)])
 group("operations", [("incidentAction", d.IncidentAction, True, False)])
 group("finance", [("invoiceAction", d.InvoiceAction, True, False)])
+group("dispatch", [("action", d.DispatchAction, True, False)])
 group("email", [("sendCode", a.Email, True, True)])
 group("phone", [("check", d.Phone, False, True)])
 group(
@@ -115,6 +125,7 @@ def dispatch(name, data, db, request, response, party):
         "commands": commands,
         "operations": operations,
         "finance": finance,
+        "dispatch": dispatch_controller,
         "webhooks": webhooks,
     }
     if prefix in controllers:

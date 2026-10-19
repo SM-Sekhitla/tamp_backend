@@ -320,14 +320,25 @@ def handle(action, data, db, request, response, party):
         return {"ok": True, "incidentId": incident["id"]}
     if action == "advanceTrip":
         assigned_driver = truck.get("driverId")
+        trip = next((r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]), None)
+        require(trip is not None and trip["status"] in STEPS[:-1], "Trip cannot advance", 409)
+        dispatches = [r.data for r in rows(db, "dispatches") if r.data["tripId"] == trip["id"]]
+        if dispatches:
+            require(
+                assigned_driver is not None
+                and any(
+                    item["driverId"] == assigned_driver and item["status"] == "ACCEPTED"
+                    for item in dispatches
+                ),
+                "The assigned driver must accept this dispatch first",
+                409,
+            )
         require(
             party.id == assigned_driver
             if assigned_driver
             else party.id == truck["transporterId"] and party.data["role"] == "TRANSPORTER",
             "Only the assigned driver may advance this trip",
         )
-        trip = next((r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]), None)
-        require(trip is not None and trip["status"] in STEPS[:-1], "Trip cannot advance", 409)
         status = STEPS[STEPS.index(trip["status"]) + 1]
         if status == "AT_PICKUP":
             require(

@@ -77,6 +77,7 @@ for name in [
     "incidents",
     "invoices",
     "transactions",
+    "dispatches",
     "notifications",
     "uploads",
     "webhooks",
@@ -101,6 +102,7 @@ for name in [
         "incidents": {"load_id": "loads", "trip_id": "trips"},
         "invoices": {"load_id": "loads", "trip_id": "trips", "match_id": "matches"},
         "transactions": {"invoice_id": "invoices"},
+        "dispatches": {"trip_id": "trips", "truck_id": "trucks"},
         "fuelLogs": {"truck_id": "trucks"},
         "maintenance": {"truck_id": "trucks"},
     }
