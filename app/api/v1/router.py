@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import current_party, is_admin
 from app.api.v1.procedures import REGISTRY, dispatch
 from app.core.config import settings
-from app.core.errors import AppError, require
+from app.core.errors import AppError, require, validation_message
 from app.db.session import get_session
 from app.schemas.tracking import PositionInput
 from app.services.records import needed, rows
@@ -297,7 +297,7 @@ async def trpc(
             message = (
                 exc.message
                 if isinstance(exc, AppError)
-                else "Invalid request data"
+                else validation_message(exc)
                 if isinstance(exc, ValidationError)
                 else "Conflicting record or state"
             )

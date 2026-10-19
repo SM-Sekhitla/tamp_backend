@@ -11,7 +11,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.v1.router import router
 from app.core.config import settings
-from app.core.errors import AppError
+from app.core.errors import AppError, validation_message
 from app.core.logging import configure_file_logging
 from app.db.session import engine
 from app.middleware.body_limit import BodyLimitMiddleware
@@ -67,7 +67,7 @@ def create_app():
     @app.exception_handler(ValidationError)
     @app.exception_handler(RequestValidationError)
     async def invalid(request: Request, exc):
-        return JSONResponse({"error": "Invalid request data"}, status_code=400)
+        return JSONResponse({"error": validation_message(exc)}, status_code=400)
 
     @app.exception_handler(Exception)
     async def internal(request: Request, exc):
