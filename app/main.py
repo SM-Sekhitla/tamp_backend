@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        from app.services.maps import close_provider_client
+
+        await close_provider_client()
         await engine.dispose()
 
 

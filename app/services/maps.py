@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -13,6 +14,15 @@ from app.core.errors import AppError, require
 from app.core.security import now
 
 PLACES = json.loads(Path(__file__).with_name("places.json").read_text())
+_provider_client = None
+_autocomplete_cache = {}
+
+
+async def close_provider_client():
+    global _provider_client
+    if _provider_client is not None:
+        await _provider_client.aclose()
+        _provider_client = None
 
 
 def _route_token(route_result, origin, destination):
@@ -41,11 +51,17 @@ def verify_route_token(token):
 
 
 async def provider_request(method, url, **kwargs):
+    global _provider_client
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-            response = await client.request(method, url, **kwargs)
-            response.raise_for_status()
-            return response.json()
+        if _provider_client is None:
+            _provider_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(8.0),
+                follow_redirects=False,
+                limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
+            )
+        response = await _provider_client.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise AppError("Mapping provider unavailable", 503) from exc
 
@@ -67,11 +83,16 @@ def _feature_place(feature):
     coordinates = feature.get("geometry", {}).get("coordinates", [])
     properties = feature.get("properties", {})
     require(len(coordinates) >= 2, "Place result has no coordinates", 503)
+    street = " ".join(
+        str(part)
+        for part in [properties.get("housenumber"), properties.get("street")]
+        if part
+    )
     parts = [
-        properties.get("name"),
-        properties.get("street"),
-        properties.get("housenumber"),
+        street or properties.get("name"),
+        properties.get("district") or properties.get("locality"),
         properties.get("city") or properties.get("town") or properties.get("village"),
+        properties.get("postcode"),
         properties.get("state"),
         properties.get("country"),
     ]
@@ -110,19 +131,38 @@ def _decode_polyline6(encoded):
 async def autocomplete(data):
     if settings.geocoding_provider != "photon" or not settings.photon_url:
         return _local_autocomplete(data.query)
+    query = " ".join(data.query.strip().split())
+    cache_key = query.casefold()
+    cached = _autocomplete_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < 60:
+        return cached[1]
     result = await provider_request(
         "GET",
         settings.photon_url.rstrip("/") + "/api",
-        params={"q": data.query, "limit": 10, "lang": "en", "bbox": "16,-35,33,-22"},
+        params={
+            "q": query,
+            "limit": 8,
+            "lang": "en",
+            "bbox": "16,-35,33,-22",
+            "countrycode": "ZA",
+            "lat": -30.5595,
+            "lon": 22.9375,
+            "location_bias_scale": 0.2,
+        },
         headers={"User-Agent": "TAMP/1.0 (address search)"},
     )
     predictions = []
+    seen = set()
     for feature in result.get("features", []):
         try:
             place = _feature_place(feature)
         except AppError:
             continue
         properties = feature.get("properties", {})
+        normalized = place["label"].casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
         ident = quote(json.dumps(place, separators=(",", ":")), safe="")
         secondary = ", ".join(
             part
@@ -136,12 +176,16 @@ async def autocomplete(data):
         predictions.append(
             {
                 "id": "photon:" + ident,
-                "primary": properties.get("name") or place["label"],
+                "primary": place["label"],
                 "secondary": secondary,
                 "place": place,
             }
         )
-    return predictions or _local_autocomplete(data.query)
+    predictions = predictions or _local_autocomplete(query)
+    if len(_autocomplete_cache) >= 500:
+        _autocomplete_cache.clear()
+    _autocomplete_cache[cache_key] = (time.monotonic(), predictions)
+    return predictions
 
 
 async def details(data):
