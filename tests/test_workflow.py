@@ -191,6 +191,32 @@ def test_complete_freight_lifecycle(client, accounts):
     assert snap["loads"][0]["status"] == "COMPLETED"
     assert snap["trips"][0]["id"] == trip_id
     assert len(snap["acceptances"]) == 2
+    assert len(snap["invoices"]) == 1
+    invoice = snap["invoices"][0]
+    assert invoice["status"] == "ISSUED"
+    assert invoice["total"] > 0
+    assert invoice["carrierPayout"] < invoice["total"]
+    login(client, "admin")
+    result(
+        rpc(
+            client,
+            "finance.invoiceAction",
+            {"invoiceId": invoice["id"], "action": "RECORD_PAYMENT", "reference": "TEST-PAY-1"},
+            True,
+        )
+    )
+    result(
+        rpc(
+            client,
+            "finance.invoiceAction",
+            {"invoiceId": invoice["id"], "action": "RELEASE_PAYOUT", "reference": "TEST-OUT-1"},
+            True,
+        )
+    )
+    settled = result(rpc(client, "snapshot.load"))["invoices"][0]
+    assert settled["status"] == "SETTLED"
+    assert len(result(rpc(client, "snapshot.load"))["transactions"]) == 2
+    login(client, "owner")
     result(
         sync(
             client,
