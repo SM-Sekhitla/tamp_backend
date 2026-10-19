@@ -251,7 +251,26 @@ def test_driver_dispatch_requires_acceptance(client, accounts):
     assert rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True).status_code == 409
     accepted = result(rpc(client, "dispatch.action", {"tripId": trip_id, "action": "ACCEPT"}, True))
     assert accepted["dispatch"]["status"] == "ACCEPTED"
+    conversation = result(rpc(client, "messages.conversations"))[0]
+    sent = result(
+        rpc(
+            client,
+            "messages.send",
+            {"conversationId": conversation["id"], "text": "Driver ready for collection"},
+            True,
+        )
+    )
+    assert sent["text"] == "Driver ready for collection"
     assert result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"] == "EN_ROUTE_PICKUP"
+    login(client, "owner")
+    owner_conversation = result(rpc(client, "messages.conversations"))[0]
+    assert owner_conversation["unreadCount"] > 0
+    assert any(
+        message["text"] == "Driver ready for collection"
+        for message in result(
+            rpc(client, "messages.list", {"conversationId": owner_conversation["id"]})
+        )
+    )
 
 
 def test_ownership_server_fields_and_atomicity(client, accounts):

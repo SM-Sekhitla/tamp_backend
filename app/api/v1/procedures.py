@@ -4,6 +4,7 @@ from app.controllers import (
     auth,
     commands,
     finance,
+    messages,
     operations,
     parties,
     utilities,
@@ -72,6 +73,15 @@ group("loads", [("list", a.Empty, False, False), ("create", d.LoadInput, True, F
 group("operations", [("incidentAction", d.IncidentAction, True, False)])
 group("finance", [("invoiceAction", d.InvoiceAction, True, False)])
 group("dispatch", [("action", d.DispatchAction, True, False)])
+group(
+    "messages",
+    [
+        ("conversations", a.Empty, False, False),
+        ("list", d.ConversationId, False, False),
+        ("send", d.MessageSend, True, False),
+        ("markRead", d.ConversationId, True, False),
+    ],
+)
 group("email", [("sendCode", a.Email, True, True)])
 group("phone", [("check", d.Phone, False, True)])
 group(
@@ -125,6 +135,7 @@ def dispatch(name, data, db, request, response, party):
         "commands": commands,
         "operations": operations,
         "finance": finance,
+        "messages": messages,
         "dispatch": dispatch_controller,
         "webhooks": webhooks,
     }

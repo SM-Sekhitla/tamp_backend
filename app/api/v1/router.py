@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import json
 import logging
@@ -26,7 +27,7 @@ from app.core.config import settings
 from app.core.errors import AppError, require
 from app.db.session import get_session
 from app.schemas.tracking import PositionInput
-from app.services.records import needed
+from app.services.records import needed, rows
 from app.services.storage import store
 
 router = APIRouter()
@@ -111,6 +112,51 @@ async def live_vehicle_position(websocket: WebSocket, trip_id: str):
             await websocket.close(code=4401)
     finally:
         await hub.remove(trip_id, websocket)
+
+
+@router.websocket("/api/v1/messages/conversations/{conversation_id}/live")
+async def live_messages(websocket: WebSocket, conversation_id: str):
+    from app.db.session import AsyncSessionLocal
+    from app.services.messaging import authorize
+
+    last_seen = ""
+    try:
+        origin = websocket.headers.get("origin")
+        require(origin in settings.cors_origins, "WebSocket origin is not allowed", 403)
+        async with AsyncSessionLocal() as db:
+            await db.run_sync(
+                lambda sync_db: authorize(
+                    sync_db,
+                    current_party(sync_db, websocket),
+                    conversation_id,
+                )
+            )
+        await websocket.accept()
+        while True:
+            async with AsyncSessionLocal() as db:
+                def read(sync_db):
+                    party = current_party(sync_db, websocket)
+                    authorize(sync_db, party, conversation_id)
+                    from app.services.records import rows
+
+                    return sorted(
+                        [
+                            row.data
+                            for row in rows(sync_db, "messages")
+                            if row.data["conversationId"] == conversation_id
+                            and row.data["createdAt"] > last_seen
+                        ],
+                        key=lambda item: item["createdAt"],
+                    )
+
+                fresh = await db.run_sync(read)
+            for message in fresh:
+                await websocket.send_json({"type": "message", "message": message})
+                last_seen = message["createdAt"]
+            await asyncio.sleep(1)
+    except (AppError, WebSocketDisconnect):
+        if websocket.client_state.name != "DISCONNECTED":
+            await websocket.close(code=4401)
 
 
 @router.get("/api/v1/capabilities")
@@ -388,6 +434,20 @@ async def download(
                 any(item.get("avatarUrl") == url for item in visible["parties"])
                 or any(url in truck.get("photos", []) for truck in visible["trucks"])
                 or any(proof.get("photoUrl") == url for proof in visible["proofs"])
+                or any(
+                    message.data.get("attachmentUrl") == url
+                    and any(
+                        conversation.data["id"] == message.data["conversationId"]
+                        and party.id
+                        in {
+                            conversation.data["ownerId"],
+                            conversation.data["carrierId"],
+                            conversation.data.get("driverId"),
+                        }
+                        for conversation in rows(sync_db, "conversations")
+                    )
+                    for message in rows(sync_db, "messages")
+                )
             )
         require(allowed, "Private file")
         return record.id, dict(record.data)

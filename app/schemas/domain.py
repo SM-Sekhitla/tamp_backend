@@ -258,6 +258,22 @@ class DispatchAction(Input):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class ConversationId(Input):
+    conversationId: str = Field(max_length=80)
+
+
+class MessageSend(ConversationId):
+    text: str = Field(default="", max_length=4000)
+    attachmentUrl: str | None = Field(default=None, max_length=300)
+    attachmentName: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def content(self):
+        if not self.text.strip() and not self.attachmentUrl:
+            raise ValueError("Message text or attachment is required")
+        return self
+
+
 class OfferPrepare(Input):
     loadId: str = Field(max_length=80)
     truckId: str = Field(max_length=80)

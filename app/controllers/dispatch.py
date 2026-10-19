@@ -56,4 +56,23 @@ def handle(action, data, db, request, response, party):
             put(db, "trucks", {**truck, "driverId": None})
             put(db, "trips", {**trip, "dispatchStatus": "NEEDS_DRIVER", "assignedDriverId": None})
     audit(db, party, f"DISPATCH_{operation}", "TRIP", trip["id"], values.get("note") or operation.title())
+    from app.services.messaging import conversation_for_trip, system_message
+
+    conversation = conversation_for_trip(db, trip["id"])
+    if conversation:
+        conversation = {
+            **conversation,
+            "driverId": (
+                dispatch["driverId"]
+                if dispatch["status"] in ["OFFERED", "ACCEPTED"]
+                else None
+            ),
+        }
+        put(db, "conversations", conversation)
+        system_message(
+            db,
+            conversation,
+            f"Dispatch {operation.lower().replace('_', ' ')}: {dispatch['status'].lower()}.",
+            "DISPATCH",
+        )
     return {"ok": True, "dispatch": dispatch}

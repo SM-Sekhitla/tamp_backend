@@ -268,7 +268,7 @@ def sync(db, party, delta):
                 data = sanitize_load(db, party, data, old)
             elif k == "trucks":
                 require(
-                    party.data["role"] in ["TRANSPORTER", "ADMIN"]
+                    party.data["role"] in ["TRANSPORTER", "DRIVER", "ADMIN"]
                     and (data["transporterId"] == party.id or is_admin(party))
                 )
                 require(not old or old["transporterId"] == data["transporterId"])
@@ -308,6 +308,8 @@ def sync(db, party, delta):
 
                 for url in data.get("photos", []):
                     own_upload(db, party, url, "TRUCK_PHOTO")
+                for url in data.get("documents", []):
+                    own_upload(db, party, url, "TRUCK_DOCUMENT")
                 owner = data["transporterId"]
             elif k == "matches":
                 load = needed(db, "loads", data["loadId"]).data

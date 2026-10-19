@@ -22,7 +22,11 @@ def own_upload(db, party, url, kind):
 
 
 def store(db, party, content, filename, kind):
-    require(kind in ["AVATAR", "KYC", "POD", "TRUCK_PHOTO"], "Invalid file kind", 400)
+    require(
+        kind in ["AVATAR", "KYC", "POD", "TRUCK_PHOTO", "TRUCK_DOCUMENT", "MESSAGE"],
+        "Invalid file kind",
+        400,
+    )
     require(0 < len(content) <= settings.max_upload_bytes, "File exceeds size limit", 413)
     used = sum(row.data["size"] for row in rows(db, "uploads") if row.owner_id == party.id)
     require(
@@ -31,7 +35,11 @@ def store(db, party, content, filename, kind):
         413,
     )
     if content.startswith(b"%PDF-"):
-        require(kind == "KYC", "PDFs are only accepted for KYC", 400)
+        require(
+            kind in ["KYC", "TRUCK_DOCUMENT", "MESSAGE"],
+            "PDFs are not accepted for this upload",
+            400,
+        )
         mime = "application/pdf"
     else:
         try:

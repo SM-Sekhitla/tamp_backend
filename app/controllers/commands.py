@@ -425,6 +425,16 @@ def handle(action, data, db, request, response, party):
                 f"{invoice['invoiceNumber']} issued for ZAR {invoice['total']:.2f}",
             )
         audit(db, party, "TRIP_STATUS_CHANGED", "TRIP", trip["id"], status)
+        from app.services.messaging import conversation_for_trip, system_message
+
+        conversation = conversation_for_trip(db, trip["id"])
+        if conversation:
+            system_message(
+                db,
+                conversation,
+                f"Trip status changed to {status.replace('_', ' ').title()}.",
+                "TRIP_STATUS",
+            )
         notify(db, load["ownerId"], load["id"], f"Trip {status.lower().replace('_', ' ')}")
         return {"ok": True, "status": status, "progressPct": progress}
     require(party.data["verification"] == "VERIFIED", "Account verification is required", 403)
@@ -537,6 +547,15 @@ def handle(action, data, db, request, response, party):
                 suggestedAction=None,
             ),
             load["ownerId"],
+        )
+        from app.services.messaging import ensure_conversation, system_message
+
+        conversation = ensure_conversation(db, trip_id, load, truck)
+        system_message(
+            db,
+            conversation,
+            "Engagement confirmed. Trip scheduled.",
+            "MATCH_CONFIRMED",
         )
         return {"ok": True, "tripId": trip_id}
     return {"ok": True}
