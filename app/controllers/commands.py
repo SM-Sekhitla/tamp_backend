@@ -27,6 +27,34 @@ STEPS = [
 ]
 
 
+def load_stops(load):
+    return load.get("stops") or [
+        {"id": f"{load['id']}-pickup", "sequence": 0, "kind": "PICKUP", "place": load["origin"], "window": load["pickupWindow"], "status": "PENDING"},
+        {"id": f"{load['id']}-dropoff", "sequence": 1, "kind": "DROPOFF", "place": load["destination"], "window": {"from": load["deliveryBy"], "to": load["deliveryBy"]}, "status": "PENDING"},
+    ]
+
+
+def next_trip_step(trip, stops):
+    status = trip["status"]
+    index = min(trip.get("currentStopIndex", 0), len(stops) - 1)
+    if status == "SCHEDULED":
+        return "EN_ROUTE_PICKUP", index
+    if status == "EN_ROUTE_PICKUP":
+        return "AT_PICKUP", index
+    if status == "AT_PICKUP":
+        return "LOADED", index
+    if status in ["LOADED", "DELIVERED"]:
+        if index + 1 >= len(stops):
+            return "COMPLETED", index
+        index += 1
+        return ("EN_ROUTE_PICKUP" if stops[index]["kind"] == "PICKUP" else "IN_TRANSIT"), index
+    if status == "IN_TRANSIT":
+        return "AT_DROPOFF", index
+    if status == "AT_DROPOFF":
+        return "DELIVERED", index
+    raise ValueError("Trip cannot advance")
+
+
 def stable_hash(value):
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -45,6 +73,7 @@ def business_terms(load, truck, match):
         "destination": load["destination"],
         "pickupWindow": load["pickupWindow"],
         "deliveryBy": load["deliveryBy"],
+        "stops": load_stops(load),
         "rate": load.get("targetRate"),
         "truck": {
             "registration": truck["registration"],
@@ -74,6 +103,14 @@ def prepare_offer(db, party, load, truck, match, data):
     journey = verify_route_token(data.journeyRouteToken)
     require(same_point(journey["origin"], load["origin"]), "Journey origin changed", 409)
     require(same_point(journey["destination"], load["destination"]), "Journey destination changed", 409)
+    expected_waypoints = [stop["place"] for stop in load_stops(load)[1:-1]]
+    supplied_waypoints = journey.get("waypoints", [])
+    require(
+        len(expected_waypoints) == len(supplied_waypoints)
+        and all(same_point(expected, supplied) for expected, supplied in zip(expected_waypoints, supplied_waypoints)),
+        "Journey stops changed",
+        409,
+    )
     deadhead = verify_route_token(data.deadheadRouteToken) if data.deadheadRouteToken else None
     if deadhead:
         require(same_point(deadhead["origin"], truck["currentLocation"]), "Truck location changed", 409)
@@ -339,19 +376,19 @@ def handle(action, data, db, request, response, party):
             else party.id == truck["transporterId"] and party.data["role"] == "TRANSPORTER",
             "Only the assigned driver may advance this trip",
         )
-        status = STEPS[STEPS.index(trip["status"]) + 1]
-        if status == "AT_PICKUP":
+        stops = load_stops(load)
+        status, stop_index = next_trip_step(trip, stops)
+        current_stop = stops[stop_index]
+        zone = "PICKUP" if current_stop["kind"] == "PICKUP" else "DESTINATION"
+        geofence = trip.get("geofences", {}).get("CURRENT_STOP") or trip.get("geofences", {}).get(zone, {})
+        if status in ["AT_PICKUP", "AT_DROPOFF"]:
             require(
-                trip.get("geofences", {}).get("PICKUP", {}).get("inside"),
-                "Enter the pickup geofence before confirming arrival",
+                geofence.get("inside"),
+                f"Enter the {current_stop['kind'].lower()} geofence before confirming arrival",
                 409,
             )
-        if status == "AT_DROPOFF":
-            require(
-                trip.get("geofences", {}).get("DESTINATION", {}).get("inside"),
-                "Enter the destination geofence before confirming arrival",
-                409,
-            )
+            stops[stop_index] = {**current_stop, "status": "ARRIVED", "arrivedAt": iso()}
+            current_stop = stops[stop_index]
         if status in ["LOADED", "DELIVERED"]:
             proof = d.get("proof")
             kind = "PICKUP" if status == "LOADED" else "DELIVERY"
@@ -362,7 +399,7 @@ def handle(action, data, db, request, response, party):
                 400,
             )
             require(
-                trip.get("geofences", {}).get(zone, {}).get("inside"),
+                geofence.get("inside"),
                 f"Proof of {kind.lower()} must be captured inside the {zone.lower()} geofence",
                 409,
             )
@@ -381,12 +418,14 @@ def handle(action, data, db, request, response, party):
                 from app.services.storage import own_upload
 
                 own_upload(db, party, proof["photoUrl"], "POD")
+            proof_id = new_id("PF")
             put(
                 db,
                 "proofs",
                 dict(
                     **proof,
-                    id=new_id("PF"),
+                    id=proof_id,
+                    stopId=current_stop["id"],
                     tripId=trip["id"],
                     loadId=load["id"],
                     kind=kind,
@@ -401,10 +440,16 @@ def handle(action, data, db, request, response, party):
                 ),
                 party.id,
             )
-        progress = round(STEPS.index(status) / (len(STEPS) - 1) * 100)
+            stops[stop_index] = {**current_stop, "status": "COMPLETED", "completedAt": iso(), "proofId": proof_id}
+        load = {**load, "stops": stops}
+        put(db, "loads", load)
+        completed_stops = sum(stop["status"] == "COMPLETED" for stop in stops)
+        progress = 100 if status == "COMPLETED" else round(completed_stops / len(stops) * 90 + (5 if status in ["AT_PICKUP", "AT_DROPOFF"] else 0))
         trip = {
             **trip,
             "status": status,
+            "currentStopIndex": stop_index,
+            "currentStopId": stops[stop_index]["id"],
             "progressPct": progress,
             "events": [*trip["events"], {"status": status, "at": iso(), "byUserId": party.id}],
             "suggestedAction": None,
@@ -538,6 +583,8 @@ def handle(action, data, db, request, response, party):
                 events=[dict(status="SCHEDULED", at=iso(), byUserId=party.id)],
                 simulatedPosition=None,
                 progressPct=0,
+                currentStopIndex=0,
+                currentStopId=load_stops(load)[0]["id"],
                 etaAt=None,
                 geofences={
                     "PICKUP": {"inside": False},

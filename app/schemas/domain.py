@@ -47,6 +47,22 @@ class Money(Input):
     vat: Literal["incl", "excl"]
 
 
+class LoadStop(Input):
+    id: str = Field(min_length=1, max_length=80)
+    sequence: int = Field(ge=0, le=99)
+    kind: Literal["PICKUP", "DROPOFF"]
+    place: Place
+    window: Window
+    contactName: str | None = Field(default=None, max_length=200)
+    contactPhone: str | None = Field(default=None, max_length=50)
+    instructions: str | None = Field(default=None, max_length=2000)
+    cargoWeightKg: float | None = Field(default=None, gt=0, le=200000)
+    status: Literal["PENDING", "ARRIVED", "COMPLETED", "FAILED", "SKIPPED"] = "PENDING"
+    arrivedAt: datetime | None = None
+    completedAt: datetime | None = None
+    proofId: str | None = Field(default=None, max_length=80)
+
+
 class LoadInput(Input):
     ownerId: str
     cargoType: Cargo
@@ -58,11 +74,19 @@ class LoadInput(Input):
     pickupWindow: Window
     deliveryBy: datetime
     specialRequirements: str | None = Field(default=None, max_length=4000)
+    stops: list[LoadStop] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def dates(self):
         if self.deliveryBy.tzinfo is None or self.deliveryBy < self.pickupWindow.from_:
             raise ValueError("Delivery must follow pickup and include a timezone")
+        if self.stops:
+            if len(self.stops) < 2 or self.stops[0].kind != "PICKUP" or self.stops[-1].kind != "DROPOFF":
+                raise ValueError("A route must start with a pickup and end with a drop-off")
+            if [stop.sequence for stop in self.stops] != list(range(len(self.stops))):
+                raise ValueError("Stop sequence must be contiguous and start at zero")
+            if any(self.stops[index].window.from_ > self.stops[index + 1].window.to for index in range(len(self.stops) - 1)):
+                raise ValueError("Stop windows must follow the route order")
         return self
 
 
@@ -86,6 +110,7 @@ class Truck(Input):
     id: str = Field(min_length=1, max_length=80)
     transporterId: str
     driverId: str | None = None
+    vehicleId: str | None = Field(default=None, max_length=80)
     registration: str = Field(min_length=1, max_length=40)
     bodyType: Body
     payloadCapacityKg: float = Field(gt=0, le=200000, allow_inf_nan=False)
@@ -97,6 +122,10 @@ class Truck(Input):
     status: Literal["AVAILABLE", "RESERVED", "ON_TRIP", "OFFLINE", "EXPIRED"]
     createdAt: datetime
     licenceExpiry: str | None = None
+    vin: str | None = Field(default=None, min_length=17, max_length=17, pattern=r"^[A-HJ-NPR-Z0-9]{17}$")
+    make: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=80)
+    year: int | None = Field(default=None, ge=1950, le=2100)
     photos: list[str] = Field(default_factory=list, max_length=20)
     documents: list[str] = Field(default_factory=list, max_length=20)
 
@@ -349,6 +378,7 @@ class Score(Input):
 class RouteInput(Input):
     origin: Coordinates
     destination: Coordinates
+    waypoints: list[Coordinates] = Field(default_factory=list, max_length=18)
 
 
 class Autocomplete(Input):

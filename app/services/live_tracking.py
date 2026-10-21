@@ -77,7 +77,18 @@ async def update_geofences(db: AsyncSession, trip_row, truck: dict, load: dict, 
     states = dict(trip.get("geofences") or {})
     events = list(trip.get("geofenceEvents") or [])
     transition = None
-    for zone, place in (("PICKUP", load["origin"]), ("DESTINATION", load["destination"])):
+    stops = load.get("stops") or [
+        {"kind": "PICKUP", "place": load["origin"]},
+        {"kind": "DROPOFF", "place": load["destination"]},
+    ]
+    stop_index = min(trip.get("currentStopIndex", 0), len(stops) - 1)
+    current_stop = stops[stop_index]
+    places = (
+        [("CURRENT_STOP", current_stop["place"])]
+        if load.get("stops")
+        else [("PICKUP", load["origin"]), ("DESTINATION", load["destination"])]
+    )
+    for zone, place in places:
         distance_m = round(distance_metres(place, lat, lng))
         state = dict(states.get(zone) or {"inside": False})
         entered = not state.get("inside") and distance_m <= settings.geofence_radius_m
@@ -104,7 +115,7 @@ async def update_geofences(db: AsyncSession, trip_row, truck: dict, load: dict, 
         )
         states[zone] = state
         transition = event
-        label = "pickup" if zone == "PICKUP" else "destination"
+        label = current_stop["kind"].lower() if zone == "CURRENT_STOP" else ("pickup" if zone == "PICKUP" else "destination")
         action = "entered" if entered else "left"
         title = f"Vehicle {action} {label} geofence"
         detail = f"Trip {trip['id']} {action} the {label} zone."
@@ -112,9 +123,12 @@ async def update_geofences(db: AsyncSession, trip_row, truck: dict, load: dict, 
             await add_notification(db, recipient, load["id"], title, detail)
 
     suggestion = trip.get("suggestedAction")
-    if states.get("PICKUP", {}).get("inside") and trip["status"] == "EN_ROUTE_PICKUP":
+    active_fence = states.get("CURRENT_STOP", {}) if load.get("stops") else (
+        states.get("PICKUP", {}) if trip["status"] == "EN_ROUTE_PICKUP" else states.get("DESTINATION", {})
+    )
+    if active_fence.get("inside") and trip["status"] == "EN_ROUTE_PICKUP":
         suggestion = "AT_PICKUP"
-    elif states.get("DESTINATION", {}).get("inside") and trip["status"] == "IN_TRANSIT":
+    elif active_fence.get("inside") and trip["status"] == "IN_TRANSIT":
         suggestion = "AT_DROPOFF"
     trip_row.data = {
         **trip,
@@ -128,7 +142,7 @@ async def update_geofences(db: AsyncSession, trip_row, truck: dict, load: dict, 
 async def websocket_party(db: AsyncSession, websocket: WebSocket):
     raw = websocket.cookies.get("tamp_session", "")
     session = await db.get(Session, token_hash(raw)) if raw else None
-    party = await db.get(Party, session.party_id) if session and session.expires > now() else None
+    party = await db.get(Party, session.user_id) if session and session.expires > now() else None
     if not party or party.data.get("suspended"):
         raise AppError("Sign in to continue", 401)
     return party

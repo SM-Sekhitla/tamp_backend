@@ -11,6 +11,7 @@ from app.controllers import (
     webhooks,
 )
 from app.controllers import dispatch as dispatch_controller
+from app.controllers import organisations as organisations_controller
 from app.schemas import auth as a
 from app.schemas import domain as d
 from app.services.domain import snapshot, sync
@@ -56,6 +57,31 @@ group(
         ("findDriver", a.Email, False, False),
         ("onboarding", a.PartyId, False, False),
         ("uploadKyc", a.Kyc, True, False),
+    ],
+)
+group(
+    "users",
+    [
+        ("register", a.Register, True, True),
+        ("list", a.Empty, False, False),
+        ("setVerification", a.Verification, True, False),
+        ("completeOnboarding", a.Onboarding, True, False),
+        ("findDriver", a.Email, False, False),
+        ("onboarding", a.PartyId, False, False),
+        ("uploadKyc", a.Kyc, True, False),
+    ],
+)
+group(
+    "organisations",
+    [
+        ("list", a.Empty, False, False),
+        ("members", a.OrganisationId, False, False),
+        ("create", a.OrganisationCreate, True, False),
+        ("addMember", a.OrganisationMemberAdd, True, False),
+        ("update", a.OrganisationUpdate, True, False),
+        ("setMemberRoles", a.OrganisationMemberRoles, True, False),
+        ("removeMember", a.OrganisationMemberRemove, True, False),
+        ("switch", a.OrganisationId, True, False),
     ],
 )
 group(
@@ -132,12 +158,14 @@ def dispatch(name, data, db, request, response, party):
     controllers = {
         "auth": auth,
         "parties": parties,
+        "users": parties,
         "commands": commands,
         "operations": operations,
         "finance": finance,
         "messages": messages,
         "dispatch": dispatch_controller,
         "webhooks": webhooks,
+        "organisations": organisations_controller,
     }
     if prefix in controllers:
         return controllers[prefix].handle(action, data, db, request, response, party)

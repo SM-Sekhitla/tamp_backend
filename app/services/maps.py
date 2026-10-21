@@ -25,10 +25,11 @@ async def close_provider_client():
         _provider_client = None
 
 
-def _route_token(route_result, origin, destination):
+def _route_token(route_result, origin, destination, waypoints=None):
     payload = {
         "origin": {"lat": origin.lat, "lng": origin.lng},
         "destination": {"lat": destination.lat, "lng": destination.lng},
+        "waypoints": [{"lat": point.lat, "lng": point.lng} for point in (waypoints or [])],
         "route": route_result,
         "expiresAt": (now() + timedelta(minutes=10)).isoformat(),
     }
@@ -209,8 +210,8 @@ async def route(data):
         settings.valhalla_url.rstrip("/") + "/route",
         json={
             "locations": [
-                {"lat": data.origin.lat, "lon": data.origin.lng, "type": "break"},
-                {"lat": data.destination.lat, "lon": data.destination.lng, "type": "break"},
+                {"lat": point.lat, "lon": point.lng, "type": "break"}
+                for point in [data.origin, *data.waypoints, data.destination]
             ],
             "costing": "truck",
             "units": "kilometers",
@@ -240,5 +241,5 @@ async def route(data):
         "geometry": {"type": "LineString", "coordinates": coordinates},
         "provider": "valhalla",
     }
-    token, expires_at = _route_token(route_result, data.origin, data.destination)
+    token, expires_at = _route_token(route_result, data.origin, data.destination, data.waypoints)
     return {**route_result, "routeToken": token, "expiresAt": expires_at}

@@ -55,6 +55,9 @@ async def record_vehicle_position(
     from app.services.live_tracking import hub, save_position
 
     party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    from app.services.rbac import require_permission
+
+    await db.run_sync(lambda sync_db: require_permission(sync_db, party, "tracking.publish"))
     position = await save_position(db, trip_id, party, payload)
     await db.commit()
     await hub.publish(trip_id, position)
@@ -70,6 +73,9 @@ async def latest_vehicle_position(
     from app.services.live_tracking import latest_position
 
     party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    from app.services.rbac import require_permission
+
+    await db.run_sync(lambda sync_db: require_permission(sync_db, party, "tracking.read"))
     return await latest_position(db, trip_id, party)
 
 
@@ -84,6 +90,9 @@ async def vehicle_position_history(
 
     require(1 <= limit <= 500, "Limit must be between 1 and 500", 400)
     party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    from app.services.rbac import require_permission
+
+    await db.run_sync(lambda sync_db: require_permission(sync_db, party, "tracking.read"))
     return await position_history(db, trip_id, party, limit)
 
 
@@ -97,6 +106,9 @@ async def live_vehicle_position(websocket: WebSocket, trip_id: str):
         require(origin in settings.cors_origins, "WebSocket origin is not allowed", 403)
         async with AsyncSessionLocal() as db:
             party = await websocket_party(db, websocket)
+            from app.services.rbac import require_permission
+
+            await db.run_sync(lambda sync_db: require_permission(sync_db, party, "tracking.read"))
             await authorize_view(db, trip_id, party)
             latest = await latest_position(db, trip_id, party)
         await websocket.accept()
@@ -124,13 +136,14 @@ async def live_messages(websocket: WebSocket, conversation_id: str):
         origin = websocket.headers.get("origin")
         require(origin in settings.cors_origins, "WebSocket origin is not allowed", 403)
         async with AsyncSessionLocal() as db:
-            await db.run_sync(
-                lambda sync_db: authorize(
-                    sync_db,
-                    current_party(sync_db, websocket),
-                    conversation_id,
-                )
-            )
+            def authorize_socket(sync_db):
+                party = current_party(sync_db, websocket)
+                from app.services.rbac import require_permission
+
+                require_permission(sync_db, party, "messages.read")
+                authorize(sync_db, party, conversation_id)
+
+            await db.run_sync(authorize_socket)
         await websocket.accept()
         while True:
             async with AsyncSessionLocal() as db:
@@ -171,7 +184,9 @@ async def capabilities():
 
 async def admin_party(db: AsyncSession, request: Request):
     party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
-    require(is_admin(party), "Administrator access is required", 403)
+    from app.services.rbac import require_permission
+
+    await db.run_sync(lambda sync_db: require_permission(sync_db, party, "system.logs.read"))
     return party
 
 
@@ -216,6 +231,10 @@ def _execute_sync(sync_db, name, payload, method, request, response):
     require(method == ("POST" if procedure.mutation else "GET"), "Method not allowed", 405)
     data = procedure.schema.model_validate(payload or {})
     party = current_party(sync_db, request, not procedure.public)
+    if party is not None:
+        from app.services.rbac import enforce_procedure_permission
+
+        enforce_procedure_permission(sync_db, party, name)
     module = name.split(".", 1)[0]
     module_logger = logging.getLogger(f"tamp.module.{module}")
     actor = party.id if party else "public"

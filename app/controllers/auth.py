@@ -7,12 +7,12 @@ from app.api.deps import COOKIE, party_payload
 from app.core.config import settings
 from app.core.errors import require
 from app.core.security import iso, new_id, now, passwords, token_hash, verify_password
-from app.db.models import Party, Session
+from app.db.models import Session, User
 from app.services.email import consume_code, issue_code
 
 
 def find_email(db, email):
-    return db.scalar(select(Party).where(Party.email == str(email).lower()))
+    return db.scalar(select(User).where(User.email == str(email).lower()))
 
 
 def create_party(db, email, password, role, name, company, **extra):
@@ -33,7 +33,7 @@ def create_party(db, email, password, role, name, company, **extra):
         onboardingComplete=True,
         **extra,
     )
-    party = Party(
+    party = User(
         id=ident,
         email=data["email"],
         password_hash=passwords.hash(password),
@@ -42,15 +42,23 @@ def create_party(db, email, password, role, name, company, **extra):
     )
     db.add(party)
     db.flush()
+    from app.services.rbac import provision_user_access
+
+    provision_user_access(db, party, company)
     return party
 
 
 def set_session(db, party, response):
     token = secrets.token_urlsafe(48)
+    from app.services.rbac import primary_organisation_id
+
+    active_organisation_id = primary_organisation_id(db, party)
+    db.info["active_organisation_id"] = active_organisation_id
     db.add(
         Session(
             token=token_hash(token),
-            party_id=party.id,
+            user_id=party.id,
+            active_organisation_id=active_organisation_id,
             expires=now() + timedelta(hours=settings.session_hours),
         )
     )
@@ -66,7 +74,7 @@ def set_session(db, party, response):
 
 
 def revoke(db, party, keep=None):
-    stmt = delete(Session).where(Session.party_id == party.id)
+    stmt = delete(Session).where(Session.user_id == party.id)
     if keep:
         stmt = stmt.where(Session.token != token_hash(keep))
     return db.execute(stmt).rowcount
@@ -75,7 +83,7 @@ def revoke(db, party, keep=None):
 def handle(action, data, db, request, response, party):
     d = data.model_dump(exclude_none=True)
     if action == "me":
-        return party_payload(party) if party else None
+        return party_payload(party, db) if party else None
     if action == "login":
         user = find_email(db, d["email"])
         valid = verify_password(d["password"], user.password_hash if user else None)
@@ -88,7 +96,7 @@ def handle(action, data, db, request, response, party):
         if old:
             db.execute(delete(Session).where(Session.token == token_hash(old)))
         set_session(db, user, response)
-        return party_payload(user)
+        return party_payload(user, db)
     if action == "logout":
         db.execute(
             delete(Session).where(Session.token == token_hash(request.cookies.get(COOKIE, "")))
@@ -131,12 +139,12 @@ def handle(action, data, db, request, response, party):
         party.data = {**party.data, "email": email}
         revoke(db, party)
         set_session(db, party, response)
-        return party_payload(party)
+        return party_payload(party, db)
     if action == "updateProfile":
         if d.get("avatarUrl"):
             from app.services.storage import own_upload
 
             own_upload(db, party, d["avatarUrl"], "AVATAR")
         party.data = {**party.data, **d}
-        return party_payload(party)
+        return party_payload(party, db)
     raise AssertionError(action)

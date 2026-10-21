@@ -105,6 +105,35 @@ class PartyId(Input):
     partyId: str
 
 
+class OrganisationId(Input):
+    organisationId: str
+
+
+class OrganisationCreate(Input):
+    name: str = Field(min_length=1, max_length=200)
+    type: Literal["CARGO_OWNER", "CARRIER", "BROKER", "DRIVER_NETWORK"]
+
+
+class OrganisationMemberAdd(OrganisationId):
+    email: EmailStr
+    role: Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER"]
+
+
+class OrganisationUpdate(OrganisationId):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class OrganisationMemberRoles(OrganisationId):
+    userId: str
+    roles: list[Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER"]] = Field(
+        min_length=1, max_length=3
+    )
+
+
+class OrganisationMemberRemove(OrganisationId):
+    userId: str
+
+
 class Verification(PartyId):
     status: Literal["UNVERIFIED", "PENDING", "VERIFIED", "REJECTED"]
 

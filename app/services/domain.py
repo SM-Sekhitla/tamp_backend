@@ -5,13 +5,15 @@ from sqlalchemy import select, text
 from app.api.deps import is_admin, party_payload
 from app.core.errors import require
 from app.core.security import iso, new_id
-from app.db.models import Party
+from app.db.models import OrganisationMembership, Party
 from app.schemas.domain import SCHEMAS
 from app.services.matching import BODIES, distance, money, score
 from app.services.records import get, needed, put, rows
 
 COLLECTIONS = [
     "loads",
+    "vehicles",
+    "vehicleDriverAssignments",
     "trucks",
     "matches",
     "trips",
@@ -28,6 +30,20 @@ COLLECTIONS = [
     "transactions",
     "dispatches",
 ]
+
+
+def organisation_user_ids(db, party):
+    active_org = db.info.get("active_organisation_id")
+    if not active_org:
+        return {party.id}
+    return set(
+        db.scalars(
+            select(OrganisationMembership.user_id).where(
+                OrganisationMembership.organisation_id == active_org,
+                OrganisationMembership.status == "ACTIVE",
+            )
+        )
+    ) or {party.id}
 
 
 def lock_domain(db):
@@ -87,25 +103,29 @@ def snapshot(db, party):
     if is_admin(party):
         return {**all_rows, "parties": [party_payload(p) for p in db.scalars(select(Party))]}
     pid = party.id
+    organisation_users = organisation_user_ids(db, party)
     loads = {
         d["id"]
         for d in all_rows["loads"]
-        if d["ownerId"] == pid or (party.data["role"] == "TRANSPORTER" and d["status"] == "POSTED")
+        if d["ownerId"] in organisation_users or (party.data["role"] == "TRANSPORTER" and d["status"] == "POSTED")
     }
     trucks = {
         d["id"]
         for d in all_rows["trucks"]
-        if d["transporterId"] == pid
+        if d["transporterId"] in organisation_users
         or d.get("driverId") == pid
         or (party.data["role"] == "FREIGHT_OWNER" and d["status"] == "AVAILABLE")
     }
+    own_vehicle_ids = {
+        d["id"] for d in all_rows["vehicles"] if d["ownerId"] in organisation_users
+    }
     own_trucks = {
-        d["id"] for d in all_rows["trucks"] if d["transporterId"] == pid or d.get("driverId") == pid
+        d["id"] for d in all_rows["trucks"] if d["transporterId"] in organisation_users or d.get("driverId") == pid
     }
     matches = {
         d["id"]
         for d in all_rows["matches"]
-        if any(item["id"] == d["loadId"] and item["ownerId"] == pid for item in all_rows["loads"])
+        if any(item["id"] == d["loadId"] and item["ownerId"] in organisation_users for item in all_rows["loads"])
         or d["truckPostingId"] in own_trucks
     }
     for m in all_rows["matches"]:
@@ -123,6 +143,10 @@ def snapshot(db, party):
                 "matches": matches,
                 "trips": trips,
             }.get(k, set())
+            if k == "vehicles":
+                visible = d["id"] in own_vehicle_ids or is_admin(party)
+            if k == "vehicleDriverAssignments":
+                visible = d["vehicleId"] in own_vehicle_ids or d["driverId"] == pid
             if k in {"ratings", "disputes", "proofs", "incidents"}:
                 visible = d["tripId"] in trips
             if k == "invoices":
@@ -137,7 +161,7 @@ def snapshot(db, party):
                 visible = d["matchId"] in matches
             if k == "reservations":
                 visible = d["truckId"] in own_trucks or any(
-                    item["id"] == d["loadId"] and item["ownerId"] == pid
+                    item["id"] == d["loadId"] and item["ownerId"] in organisation_users
                     for item in all_rows["loads"]
                 )
             if k in {"fuelLogs", "maintenance"}:
@@ -148,8 +172,8 @@ def snapshot(db, party):
                 )
             if visible:
                 result[k].append(d)
-    related = {pid}
-    contacts = {pid}
+    related = set(organisation_users)
+    contacts = set(organisation_users)
     for t in result["trucks"]:
         related.add(t["transporterId"])
         if t.get("driverId"):
@@ -195,9 +219,10 @@ def trip_context(db, trip_id, party):
 
 
 def sanitize_load(db, party, data, old=None):
-    require(party.data["role"] == "FREIGHT_OWNER" and data["ownerId"] == party.id)
+    organisation_users = organisation_user_ids(db, party)
+    require(party.data["role"] == "FREIGHT_OWNER" and data["ownerId"] in organisation_users)
     if old:
-        require(old["ownerId"] == party.id)
+        require(old["ownerId"] in organisation_users)
         require(
             old["status"] in ["POSTED", "DRAFT", "EXPIRED", "CANCELLED"]
             and data["status"] in ["POSTED", "DRAFT", "CANCELLED"],
@@ -206,7 +231,16 @@ def sanitize_load(db, party, data, old=None):
         )
     else:
         require(data["status"] in ["POSTED", "DRAFT"], "Invalid initial load status", 400)
-    data["distanceKm"] = distance(data["origin"], data["destination"])
+    if not data.get("stops"):
+        data["stops"] = [
+            {"id": new_id("LS"), "sequence": 0, "kind": "PICKUP", "place": data["origin"], "window": data["pickupWindow"], "cargoWeightKg": data["weightKg"], "status": "PENDING"},
+            {"id": new_id("LS"), "sequence": 1, "kind": "DROPOFF", "place": data["destination"], "window": {"from": data["deliveryBy"], "to": data["deliveryBy"]}, "cargoWeightKg": data["weightKg"], "status": "PENDING"},
+        ]
+    data["origin"] = data["stops"][0]["place"]
+    data["destination"] = data["stops"][-1]["place"]
+    data["pickupWindow"] = data["stops"][0]["window"]
+    data["deliveryBy"] = data["stops"][-1]["window"]["to"]
+    data["distanceKm"] = round(sum(distance(a["place"], b["place"]) for a, b in zip(data["stops"], data["stops"][1:])), 1)
     data["requiredBodyTypes"] = BODIES[data["cargoType"]]
     data["targetRate"] = money(data)
     data["createdAt"] = iso() if not old or old["status"] == "EXPIRED" else old["createdAt"]
@@ -217,6 +251,7 @@ def sanitize_load(db, party, data, old=None):
 def sync(db, party, delta):
     lock_domain(db)
     changes = delta.upserts
+    organisation_users = organisation_user_ids(db, party)
     # Server-owned records cannot be authored through the legacy delta API.
     for k in ["trips", "acceptances", "proofs", "incidents", "invoices", "transactions", "dispatches"]:
         for d in changes.get(k, []):
@@ -258,7 +293,7 @@ def sync(db, party, delta):
                 continue
             owner = party.id
             if k == "loads":
-                if old and data["ownerId"] != party.id:
+                if old and data["ownerId"] not in organisation_users:
                     # A carrier request may include an unchanged public load.
                     require(old == data, "Cannot modify another owner's load")
                     continue
@@ -269,7 +304,7 @@ def sync(db, party, delta):
             elif k == "trucks":
                 require(
                     party.data["role"] in ["TRANSPORTER", "DRIVER", "ADMIN"]
-                    and (data["transporterId"] == party.id or is_admin(party))
+                    and (data["transporterId"] in organisation_users or is_admin(party))
                 )
                 require(not old or old["transporterId"] == data["transporterId"])
                 require(
@@ -442,6 +477,10 @@ def sync(db, party, delta):
                         from app.services.storage import own_upload
 
                         own_upload(db, party, data["photoUrl"], "POD")
+            if k == "trucks":
+                from app.services.fleet import sync_vehicle_for_truck
+
+                sync_vehicle_for_truck(db, party, data, old)
             put(db, k, data, owner)
             audit(
                 db,

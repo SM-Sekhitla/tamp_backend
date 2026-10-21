@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.security import iso, new_id, passwords
-from app.db.models import Party
+from app.db.models import User
 from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger("tamp.bootstrap")
@@ -36,11 +36,11 @@ async def ensure_platform_super_user():
         async with AsyncSessionLocal.begin() as db:
             await db.execute(text(f"SELECT pg_advisory_xact_lock({_BOOTSTRAP_LOCK_ID})"))
             existing = await db.scalar(
-                select(Party)
+                select(User)
                 .where(
                     or_(
-                        Party.email == email,
-                        Party.data["username"].as_string() == username,
+                        User.email == email,
+                        User.data["username"].as_string() == username,
                     )
                 )
                 .limit(1)
@@ -68,7 +68,7 @@ async def ensure_platform_super_user():
             ident = new_id("SUP")
             password_hash = await asyncio.to_thread(passwords.hash, password)
             db.add(
-                Party(
+                User(
                     id=ident,
                     email=email,
                     password_hash=password_hash,
@@ -92,6 +92,11 @@ async def ensure_platform_super_user():
                     onboarding={},
                 )
             )
+            await db.flush()
+            created = await db.get(User, ident)
+            from app.services.rbac import provision_user_access
+
+            await db.run_sync(lambda sync_db: provision_user_access(sync_db, created))
     except IntegrityError:
         logger.info("Platform super-user was bootstrapped by another process")
         return None

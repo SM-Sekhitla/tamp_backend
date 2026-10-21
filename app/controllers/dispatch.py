@@ -49,7 +49,10 @@ def handle(action, data, db, request, response, party):
         now = iso()
         dispatch = {"id": new_id("DP"), "tripId": trip["id"], "loadId": load["id"], "truckId": truck["id"], "carrierId": party.id, "driverId": driver.id, "status": status, "offeredAt": now, "respondedAt": now if owner_driver else None, "note": values.get("note"), "timeline": [{"status": status, "at": now, "byUserId": party.id}]}
         put(db, "dispatches", dispatch, party.id)
-        put(db, "trucks", {**truck, "driverId": driver.id})
+        updated_truck = {**truck, "driverId": driver.id}
+        from app.services.fleet import sync_vehicle_for_truck
+        sync_vehicle_for_truck(db, party, updated_truck, truck)
+        put(db, "trucks", updated_truck)
         put(db, "trips", {**trip, "dispatchStatus": "ASSIGNED" if owner_driver else "AWAITING_DRIVER", "assignedDriverId": driver.id})
         if not owner_driver:
             notify(db, driver.id, trip["id"], "New delivery assignment", f"{load['origin']['label']} to {load['destination']['label']}")
@@ -62,13 +65,19 @@ def handle(action, data, db, request, response, party):
             put(db, "dispatches", dispatch)
             put(db, "trips", {**trip, "dispatchStatus": "ASSIGNED" if status == "ACCEPTED" else "NEEDS_DRIVER", "assignedDriverId": party.id if status == "ACCEPTED" else None})
             if status == "DECLINED":
-                put(db, "trucks", {**truck, "driverId": None})
+                updated_truck = {**truck, "driverId": None}
+                from app.services.fleet import sync_vehicle_for_truck
+                sync_vehicle_for_truck(db, party, updated_truck, truck)
+                put(db, "trucks", updated_truck)
             notify(db, truck["transporterId"], trip["id"], f"Driver {status.lower()} assignment", load["id"])
         else:
             require(party.id == truck["transporterId"], "Only the carrier may cancel dispatch", 403)
             dispatch = {**current, "status": "CANCELLED", "cancelledAt": iso(), "cancelledById": party.id, "timeline": [*current.get("timeline", []), {"status": "CANCELLED", "at": iso(), "byUserId": party.id, "note": values.get("note")} ]}
             put(db, "dispatches", dispatch)
-            put(db, "trucks", {**truck, "driverId": None})
+            updated_truck = {**truck, "driverId": None}
+            from app.services.fleet import sync_vehicle_for_truck
+            sync_vehicle_for_truck(db, party, updated_truck, truck)
+            put(db, "trucks", updated_truck)
             put(db, "trips", {**trip, "dispatchStatus": "NEEDS_DRIVER", "assignedDriverId": None})
     audit(db, party, f"DISPATCH_{operation}", "TRIP", trip["id"], values.get("note") or operation.title())
     from app.services.messaging import conversation_for_trip, system_message

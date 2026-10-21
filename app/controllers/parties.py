@@ -2,7 +2,7 @@ from app.api.deps import is_admin, role
 from app.controllers.auth import create_party, find_email
 from app.core.errors import require
 from app.core.security import iso
-from app.db.models import Party
+from app.db.models import User
 from app.services.email import consume_code
 
 
@@ -43,7 +43,7 @@ def handle(action, data, db, request, response, party):
         return driver.data if driver and driver.data["role"] == "DRIVER" else None
     if action == "onboarding":
         require(party.id == d["partyId"] or is_admin(party))
-        user = db.get(Party, d["partyId"])
+        user = db.get(User, d["partyId"])
         require(user is not None, "User not found", 404)
         return user.onboarding
     if action == "setVerification":
@@ -51,7 +51,7 @@ def handle(action, data, db, request, response, party):
         from app.services.domain import lock_domain, refresh_suggestions
 
         lock_domain(db)
-        user = db.get(Party, d["partyId"])
+        user = db.get(User, d["partyId"])
         require(user is not None, "User not found", 404)
         user.data = {**user.data, "verification": d["status"]}
         from app.services.domain import audit

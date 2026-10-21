@@ -23,7 +23,12 @@ from app.middleware.security import SecurityHeadersMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.db.session import AsyncSessionLocal
     from app.services.initial_users import ensure_platform_super_user
+    from app.services.rbac import seed_rbac
+
+    async with AsyncSessionLocal.begin() as db:
+        await db.run_sync(seed_rbac)
 
     await ensure_platform_super_user()
     try:

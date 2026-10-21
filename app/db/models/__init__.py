@@ -1,6 +1,18 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,8 +21,8 @@ from app.db.base import Base
 Json = JSON().with_variant(JSONB, "postgresql")
 
 
-class Party(Base):
-    __tablename__ = "parties"
+class User(Base):
+    __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(512))
@@ -18,10 +30,86 @@ class Party(Base):
     onboarding: Mapped[dict] = mapped_column(Json, default=dict)
 
 
+# Compatibility alias while the API's public `Party` name is migrated separately.
+Party = User
+
+
+class Organisation(Base):
+    __tablename__ = "organisations"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    type: Mapped[str] = mapped_column(String(40), index=True)
+    verification: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
+    data: Mapped[dict] = mapped_column(Json, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Role(Base):
+    __tablename__ = "roles"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    scope: Mapped[str] = mapped_column(String(20), index=True)
+    description: Mapped[str] = mapped_column(String(300), default="")
+    system: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    code: Mapped[str] = mapped_column(String(100), primary_key=True)
+    description: Mapped[str] = mapped_column(String(300))
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    role_id: Mapped[str] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    permission_code: Mapped[str] = mapped_column(
+        ForeignKey("permissions.code", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class OrganisationMembership(Base):
+    __tablename__ = "organisation_memberships"
+    __table_args__ = (UniqueConstraint("organisation_id", "user_id"),)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    organisation_id: Mapped[str] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    __table_args__ = (UniqueConstraint("user_id", "role_id", "organisation_id"),)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    role_id: Mapped[str] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), index=True
+    )
+    organisation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    assigned_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Session(Base):
     __tablename__ = "sessions"
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
-    party_id: Mapped[str] = mapped_column(ForeignKey("parties.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    active_organisation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("organisations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     expires: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
@@ -46,7 +134,7 @@ class VehiclePosition(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     trip_id: Mapped[str] = mapped_column(ForeignKey("trips.id", ondelete="CASCADE"), index=True)
     truck_id: Mapped[str] = mapped_column(ForeignKey("trucks.id", ondelete="CASCADE"), index=True)
-    reported_by: Mapped[str] = mapped_column(ForeignKey("parties.id"), index=True)
+    reported_by: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     lat: Mapped[float] = mapped_column(Float)
@@ -61,6 +149,8 @@ class VehiclePosition(Base):
 MODELS = {}
 for name in [
     "loads",
+    "vehicles",
+    "vehicleDriverAssignments",
     "trucks",
     "matches",
     "route_quotes",
@@ -88,10 +178,15 @@ for name in [
     attrs = {
         "__tablename__": name,
         "id": mapped_column(String(80), primary_key=True),
-        "owner_id": mapped_column(ForeignKey("parties.id"), nullable=True, index=True),
+        "owner_id": mapped_column(ForeignKey("users.id"), nullable=True, index=True),
+        "organisation_id": mapped_column(
+            ForeignKey("organisations.id"), nullable=True, index=True
+        ),
         "data": mapped_column(Json, nullable=False),
     }
     refs = {
+        "vehicleDriverAssignments": {"vehicle_id": "vehicles", "driver_id": "users"},
+        "trucks": {"vehicle_id": "vehicles"},
         "matches": {"load_id": "loads", "truck_id": "trucks"},
         "route_quotes": {"load_id": "loads", "truck_id": "trucks", "match_id": "matches"},
         "match_offers": {"match_id": "matches"},
