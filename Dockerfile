@@ -5,6 +5,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 RUN useradd --create-home --uid 10001 tamp && mkdir -p /app/storage/uploads && chown -R tamp:tamp /app
 COPY --chown=tamp:tamp . .
+RUN chmod +x /app/docker-entrypoint.sh
 USER tamp
 EXPOSE 5000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5000", "--no-proxy-headers"]
+CMD ["/app/docker-entrypoint.sh"]
