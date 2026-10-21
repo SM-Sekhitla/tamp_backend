@@ -145,14 +145,14 @@ def upgrade():
                COALESCE(data->>'role', 'DRIVER'),
                COALESCE(data->>'verification', 'PENDING'),
                jsonb_build_object('createdByUserId', id, 'migrated', true),
-               COALESCE((data->>'createdAt')::timestamptz, :now)
+               COALESCE(NULLIF(data->>'createdAt', '')::timestamptz, CAST(:now AS timestamptz))
         FROM users
         WHERE COALESCE(data->>'role', '') NOT IN ('ADMIN', 'system_super_user')
     """).bindparams(now=now))
     op.execute(sa.text("""
         INSERT INTO organisation_memberships (id, organisation_id, user_id, status, is_primary, created_at)
         SELECT 'OM-' || substr(md5(id), 1, 24), 'ORG-' || substr(md5(id), 1, 24), id, 'ACTIVE', true,
-               COALESCE((data->>'createdAt')::timestamptz, :now)
+               COALESCE(NULLIF(data->>'createdAt', '')::timestamptz, CAST(:now AS timestamptz))
         FROM users
         WHERE COALESCE(data->>'role', '') NOT IN ('ADMIN', 'system_super_user')
     """).bindparams(now=now))
@@ -168,7 +168,7 @@ def upgrade():
                END,
                CASE WHEN data->>'role' IN ('ADMIN', 'system_super_user') THEN NULL
                     ELSE 'ORG-' || substr(md5(id), 1, 24) END,
-               NULL, COALESCE((data->>'createdAt')::timestamptz, :now)
+               NULL, COALESCE(NULLIF(data->>'createdAt', '')::timestamptz, CAST(:now AS timestamptz))
         FROM users
     """).bindparams(now=now))
 
