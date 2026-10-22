@@ -565,3 +565,20 @@ def refresh_suggestions(db):
                 createdAt=old.data["createdAt"] if old else iso(),
             )
             put(db, "matches", data, load["ownerId"])
+            if old is None and result["score"] >= 70:
+                from app.services.notifications import notify_organisation
+                from app.services.rbac import ROLE_IDS
+
+                truck_row = get(db, "trucks", truck["id"])
+                notify_organisation(
+                    db,
+                    truck_row.organisation_id,
+                    title="New matching load",
+                    detail=(
+                        f"{load['origin']['label']} to {load['destination']['label']} "
+                        f"matches {truck['registration']} at {result['score']:.0f}%"
+                    ),
+                    subject_type="LOAD",
+                    subject_id=load["id"],
+                    role_ids={ROLE_IDS["TRANSPORTER"], ROLE_IDS["DISPATCHER"]},
+                )

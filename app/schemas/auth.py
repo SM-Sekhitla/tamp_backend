@@ -116,7 +116,7 @@ class OrganisationCreate(Input):
 
 class OrganisationMemberAdd(OrganisationId):
     email: EmailStr
-    role: Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER"]
+    role: Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER", "CARGO_OPERATOR", "DISPATCHER"]
 
 
 class OrganisationUpdate(OrganisationId):
@@ -125,7 +125,7 @@ class OrganisationUpdate(OrganisationId):
 
 class OrganisationMemberRoles(OrganisationId):
     userId: str
-    roles: list[Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER"]] = Field(
+    roles: list[Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER", "CARGO_OPERATOR", "DISPATCHER"]] = Field(
         min_length=1, max_length=3
     )
 

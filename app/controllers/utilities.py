@@ -74,7 +74,13 @@ def handle(procedure, data, db, request, response, party):
         refresh_suggestions(db)
         return {"id": ident}
     if procedure.startswith("notifications."):
-        records = [r for r in rows(db, "notifications") if r.owner_id == party.id]
+        active_org = db.info.get("active_organisation_id")
+        records = [
+            r
+            for r in rows(db, "notifications")
+            if r.owner_id == party.id
+            and (r.organisation_id is None or r.organisation_id == active_org)
+        ]
         if procedure.endswith("unreadCount"):
             return sum(r.data["unread"] for r in records)
         if procedure.endswith("list"):

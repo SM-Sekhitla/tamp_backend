@@ -41,6 +41,14 @@ def _payload(organisation, membership=None):
     }
 
 
+def _allowed_member_roles(organisation, party):
+    if party.data.get("role") == "system_super_user":
+        return set(ROLE_IDS)
+    if organisation.type in {"CARRIER", "DRIVER_NETWORK", "TRANSPORTER"}:
+        return {"DRIVER", "DISPATCHER"}
+    return {"CARGO_OPERATOR"}
+
+
 def handle(action, data, db, request, response, party):
     values = data.model_dump(mode="json", exclude_none=True)
     if action == "list":
@@ -84,7 +92,11 @@ def handle(action, data, db, request, response, party):
             for membership in memberships
         ]
     if action == "create":
-        require_permission(db, party, "organisations.manage")
+        require(
+            party.data.get("role") == "system_super_user",
+            "Only the system super user can create organisations",
+            403,
+        )
         organisation = Organisation(
             id=new_id("ORG"),
             name=values["name"].strip(),
@@ -127,16 +139,18 @@ def handle(action, data, db, request, response, party):
         return {"ok": True, "activeOrganisationId": organisation.id}
     if action == "update":
         organisation = _require_access(
-            db, party, values["organisationId"], "organisations.manage"
+            db, party, values["organisationId"], "organisations.update"
         )
         organisation.name = values["name"].strip()
         return _payload(organisation, _membership(db, party.id, organisation.id))
     if action == "setMemberRoles":
         organisation = _require_access(
-            db, party, values["organisationId"], "organisations.manage"
+            db, party, values["organisationId"], "organisations.members.manage"
         )
         membership = _membership(db, values["userId"], organisation.id)
         require(membership is not None, "Organisation member not found", 404)
+        allowed_roles = _allowed_member_roles(organisation, party)
+        require(set(values["roles"]).issubset(allowed_roles), "Role is not valid for this organisation", 400)
         allowed_ids = {ROLE_IDS[role] for role in values["roles"]}
         db.execute(
             delete(UserRole).where(
@@ -158,7 +172,7 @@ def handle(action, data, db, request, response, party):
         return {"ok": True}
     if action == "removeMember":
         organisation = _require_access(
-            db, party, values["organisationId"], "organisations.manage"
+            db, party, values["organisationId"], "organisations.members.manage"
         )
         membership = _membership(db, values["userId"], organisation.id)
         require(membership is not None, "Organisation member not found", 404)
@@ -178,8 +192,9 @@ def handle(action, data, db, request, response, party):
         return {"ok": True}
     require(action == "addMember", "Unknown organisation action", 404)
     organisation = _require_access(
-        db, party, values["organisationId"], "organisations.manage"
+        db, party, values["organisationId"], "organisations.members.manage"
     )
+    require(values["role"] in _allowed_member_roles(organisation, party), "Role is not valid for this organisation", 400)
     user = find_email(db, values["email"])
     require(user is not None, "Registered user not found", 404)
     membership = _membership(db, user.id, organisation.id)

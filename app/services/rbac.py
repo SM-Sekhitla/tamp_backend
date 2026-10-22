@@ -17,6 +17,8 @@ ROLE_IDS = {
     "FREIGHT_OWNER": "ROLE-FREIGHT-OWNER",
     "TRANSPORTER": "ROLE-TRANSPORTER",
     "DRIVER": "ROLE-DRIVER",
+    "CARGO_OPERATOR": "ROLE-CARGO-OPERATOR",
+    "DISPATCHER": "ROLE-DISPATCHER",
 }
 
 PERMISSIONS = {
@@ -24,7 +26,9 @@ PERMISSIONS = {
     "users.read": "View users",
     "users.verify": "Verify and reject users",
     "organisations.read": "View organisations and memberships",
-    "organisations.manage": "Manage organisations and memberships",
+    "organisations.create": "Create organisations",
+    "organisations.update": "Update organisation details",
+    "organisations.members.manage": "Add, remove, and assign organisation members",
     "loads.read": "View permitted loads",
     "loads.manage": "Create and manage freight loads",
     "trucks.read": "View permitted trucks",
@@ -59,13 +63,13 @@ ROLE_DEFINITIONS = {
     "ADMIN": {
         "name": "Platform Administrator",
         "scope": "PLATFORM",
-        "permissions": set(PERMISSIONS),
+        "permissions": set(PERMISSIONS) - {"organisations.create"},
     },
     "FREIGHT_OWNER": {
         "name": "Freight Owner",
         "scope": "ORGANISATION",
         "permissions": {
-            "organisations.read", "organisations.manage", "loads.read", "loads.manage", "trucks.read",
+            "organisations.read", "organisations.update", "organisations.members.manage", "loads.read", "loads.manage", "trucks.read",
             "matches.read", "matches.manage", "trips.read", "trips.manage", "incidents.report",
             "finance.read", "messages.read", "messages.send", "notifications.read",
             "tracking.read", "maps.use",
@@ -75,7 +79,7 @@ ROLE_DEFINITIONS = {
         "name": "Transporter",
         "scope": "ORGANISATION",
         "permissions": {
-            "organisations.read", "organisations.manage", "loads.read", "trucks.read", "trucks.manage",
+            "organisations.read", "organisations.update", "organisations.members.manage", "loads.read", "trucks.read", "trucks.manage",
             "matches.read", "matches.manage", "trips.read", "trips.manage",
             "dispatch.manage", "incidents.report", "finance.read", "messages.read",
             "messages.send", "notifications.read", "tracking.read", "tracking.publish",
@@ -89,6 +93,26 @@ ROLE_DEFINITIONS = {
             "organisations.read", "trucks.read", "trips.read", "trips.manage",
             "dispatch.respond", "incidents.report", "messages.read", "messages.send",
             "notifications.read", "tracking.read", "tracking.publish", "maps.use",
+        },
+    },
+    "CARGO_OPERATOR": {
+        "name": "Cargo Operator",
+        "scope": "ORGANISATION",
+        "permissions": {
+            "organisations.read", "loads.read", "loads.manage", "trucks.read",
+            "matches.read", "matches.manage", "trips.read", "incidents.report",
+            "finance.read", "messages.read", "messages.send", "notifications.read",
+            "tracking.read", "maps.use",
+        },
+    },
+    "DISPATCHER": {
+        "name": "Fleet Dispatcher",
+        "scope": "ORGANISATION",
+        "permissions": {
+            "organisations.read", "loads.read", "trucks.read", "trucks.manage",
+            "matches.read", "matches.manage", "trips.read", "trips.manage",
+            "dispatch.manage", "incidents.report", "messages.read", "messages.send",
+            "notifications.read", "tracking.read", "maps.use",
         },
     },
 }
@@ -267,11 +291,11 @@ def require_permission(db, user, code):
 PROCEDURE_PERMISSIONS = {
     "organisations.list": "organisations.read",
     "organisations.members": "organisations.read",
-    "organisations.create": "organisations.manage",
-    "organisations.addMember": "organisations.manage",
-    "organisations.update": "organisations.manage",
-    "organisations.setMemberRoles": "organisations.manage",
-    "organisations.removeMember": "organisations.manage",
+    "organisations.create": "organisations.create",
+    "organisations.addMember": "organisations.members.manage",
+    "organisations.update": "organisations.update",
+    "organisations.setMemberRoles": "organisations.members.manage",
+    "organisations.removeMember": "organisations.members.manage",
     "organisations.switch": "organisations.read",
     "parties.list": "users.read",
     "parties.setVerification": "users.verify",
