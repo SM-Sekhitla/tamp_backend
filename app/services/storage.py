@@ -27,11 +27,15 @@ def store(db, party, content, filename, kind):
         "Invalid file kind",
         400,
     )
-    require(0 < len(content) <= settings.max_upload_bytes, "File exceeds size limit", 413)
+    require(
+        0 < len(content) <= settings.max_upload_bytes,
+        f"This file is too large. The maximum size for one file is {settings.max_upload_bytes // (1024 * 1024)} MB.",
+        413,
+    )
     used = sum(row.data["size"] for row in rows(db, "uploads") if row.owner_id == party.id)
     require(
         used + len(content) <= settings.max_account_upload_bytes,
-        "Account upload quota exceeded",
+        f"Your account has reached its {settings.max_account_upload_bytes // (1024 * 1024)} MB upload limit. Remove files you no longer need or contact support for more storage.",
         413,
     )
     if content.startswith(b"%PDF-"):
