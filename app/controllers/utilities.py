@@ -97,6 +97,8 @@ def handle(procedure, data, db, request, response, party):
         return maps.autocomplete(data)
     if procedure == "geocode.details":
         return maps.details(data)
+    if procedure == "geocode.reverse":
+        return maps.reverse(data)
     if procedure == "routes.compute":
         return maps.route(data)
     raise AssertionError(procedure)

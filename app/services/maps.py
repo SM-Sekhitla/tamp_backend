@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -91,7 +92,7 @@ def _feature_place(feature):
     )
     parts = [
         street or properties.get("name"),
-        properties.get("district") or properties.get("locality"),
+        properties.get("locality") or properties.get("district") or properties.get("suburb"),
         properties.get("city") or properties.get("town") or properties.get("village"),
         properties.get("postcode"),
         properties.get("state"),
@@ -104,6 +105,44 @@ def _feature_place(feature):
         "lat": float(coordinates[1]),
         "lng": float(coordinates[0]),
     }
+
+
+def _predictions(features):
+    predictions = []
+    seen = set()
+    for feature in features:
+        try:
+            place = _feature_place(feature)
+        except AppError:
+            continue
+        properties = feature.get("properties", {})
+        normalized = place["label"].casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        ident = quote(json.dumps(place, separators=(",", ":")), safe="")
+        secondary = ", ".join(
+            dict.fromkeys(
+                str(part)
+                for part in [
+                    properties.get("locality") or properties.get("district"),
+                    properties.get("city") or properties.get("town") or properties.get("village"),
+                    properties.get("state"),
+                    properties.get("postcode"),
+                ]
+                if part
+            )
+        )
+        predictions.append(
+            {
+                "id": "photon:" + ident,
+                "primary": place["label"],
+                "secondary": secondary,
+                "place": place,
+                "hasHouseNumber": bool(properties.get("housenumber")),
+            }
+        )
+    return predictions
 
 
 def _decode_polyline6(encoded):
@@ -137,51 +176,47 @@ async def autocomplete(data):
     cached = _autocomplete_cache.get(cache_key)
     if cached and time.monotonic() - cached[0] < 60:
         return cached[1]
+    common = {
+        "limit": 10,
+        "lang": "en",
+        "bbox": "16,-35,33,-22",
+        "countrycode": "ZA",
+        "lat": -30.5595,
+        "lon": 22.9375,
+        "location_bias_scale": 0.2,
+    }
     result = await provider_request(
         "GET",
         settings.photon_url.rstrip("/") + "/api",
-        params={
-            "q": query,
-            "limit": 8,
-            "lang": "en",
-            "bbox": "16,-35,33,-22",
-            "countrycode": "ZA",
-            "lat": -30.5595,
-            "lon": 22.9375,
-            "location_bias_scale": 0.2,
-        },
+        params={"q": query, **common},
         headers={"User-Agent": "TAMP/1.0 (address search)"},
     )
-    predictions = []
-    seen = set()
-    for feature in result.get("features", []):
+    features = list(result.get("features", []))
+    numbered = re.match(r"^\s*([0-9]+[A-Za-z]?(?:[-/][0-9A-Za-z]+)?)\s+([^,]+)(?:,\s*(.+))?$", query)
+    if numbered:
+        structured_params = {
+            "housenumber": numbered.group(1),
+            "street": numbered.group(2).strip(),
+            "countrycode": "ZA",
+            "limit": 10,
+            "lang": "en",
+        }
+        if numbered.group(3):
+            structured_params["city"] = numbered.group(3).split(",")[-1].strip()
         try:
-            place = _feature_place(feature)
+            structured = await provider_request(
+                "GET",
+                settings.photon_url.rstrip("/") + "/structured",
+                params=structured_params,
+                headers={"User-Agent": "TAMP/1.0 (structured address search)"},
+            )
+            features = [*structured.get("features", []), *features]
         except AppError:
-            continue
-        properties = feature.get("properties", {})
-        normalized = place["label"].casefold()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        ident = quote(json.dumps(place, separators=(",", ":")), safe="")
-        secondary = ", ".join(
-            part
-            for part in [
-                properties.get("city") or properties.get("town") or properties.get("village"),
-                properties.get("state"),
-                properties.get("country"),
-            ]
-            if part
-        )
-        predictions.append(
-            {
-                "id": "photon:" + ident,
-                "primary": place["label"],
-                "secondary": secondary,
-                "place": place,
-            }
-        )
+            # Some third-party Photon instances disable structured search.
+            pass
+    predictions = _predictions(features)
+    predictions.sort(key=lambda item: not item.pop("hasHouseNumber"))
+    predictions = predictions[:10]
     predictions = predictions or _local_autocomplete(query)
     if len(_autocomplete_cache) >= 500:
         _autocomplete_cache.clear()
@@ -200,6 +235,34 @@ async def details(data):
         require(place is not None, "Place not found", 404)
         return place
     raise AppError("Place not found", 404)
+
+
+async def reverse(data):
+    if settings.geocoding_provider != "photon" or not settings.photon_url:
+        return {
+            "label": f"Current location ({data.lat:.6f}, {data.lng:.6f})",
+            "province": "",
+            "lat": data.lat,
+            "lng": data.lng,
+        }
+    result = await provider_request(
+        "GET",
+        settings.photon_url.rstrip("/") + "/reverse",
+        params={
+            "lat": data.lat,
+            "lon": data.lng,
+            "radius": 0.25,
+            "limit": 1,
+            "lang": "en",
+        },
+        headers={"User-Agent": "TAMP/1.0 (current location lookup)"},
+    )
+    features = result.get("features", [])
+    require(features, "No address was found near your current location", 404)
+    place = _feature_place(features[0])
+    # Preserve the device coordinate. The returned OSM feature may represent
+    # the centre of a building or road segment rather than the user's position.
+    return {**place, "lat": data.lat, "lng": data.lng}
 
 
 async def route(data):

@@ -128,7 +128,12 @@ group(
     ],
 )
 group(
-    "geocode", [("autocomplete", d.Autocomplete, False, True), ("details", d.Details, False, True)]
+    "geocode",
+    [
+        ("autocomplete", d.Autocomplete, False, True),
+        ("details", d.Details, False, True),
+        ("reverse", d.ReverseGeocode, False, True),
+    ],
 )
 group("routes", [("compute", d.RouteInput, False, False)])
 group(

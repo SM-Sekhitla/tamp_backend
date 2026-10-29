@@ -391,6 +391,10 @@ class Details(Input):
     sessionToken: str | None = Field(default=None, max_length=100)
 
 
+class ReverseGeocode(Coordinates):
+    pass
+
+
 class Phone(Input):
     raw: str = Field(max_length=50)
 
