@@ -71,7 +71,7 @@ The backend owns prices, scores, receipts, trip transitions, and audit records. 
 - Tracking links are signed, expire after seven days, and omit contacts, prices, receipts, and proof files.
 - Webhooks require an explicit HTTPS hostname allowlist. The worker rejects private DNS targets, verifies TLS, avoids redirects, signs payloads, and retries. Delivery is at least once.
 
-Mailjet or SMTP and `GOOGLE_MAPS_API_KEY` enable live email and Google Places/Routes. Without a Maps key, autocomplete uses a small South African city-centre directory and routes use the frontend's approximate fallback. Pricing comes from configurable `QUOTE_*` baseline settings; review those figures before commercial use. Google social login is not implemented.
+Mailjet or SMTP enables live email. TomTom powers South African address/POI autocomplete and reverse geocoding when `GEOCODING_PROVIDER=tomtom` and `TOMTOM_API_KEY` is configured; the key remains server-side. Valhalla supplies development routing through `VALHALLA_URL`. Photon and a small South African city-centre directory remain fallback geocoders. Pricing comes from configurable `QUOTE_*` baseline settings; review those figures before commercial use. Google social login is not implemented.
 
 For production, set `ENVIRONMENT=production`, secure cookies, unique credentials, explicit hosts/origins, Mailjet or SMTP, and TLS at the ingress. Add backups, monitoring, storage retention, and malware scanning appropriate to your environment.
 

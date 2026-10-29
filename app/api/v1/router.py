@@ -176,7 +176,15 @@ async def live_messages(websocket: WebSocket, conversation_id: str):
 async def capabilities():
     return {
         "googleLogin": False,
-        "maps": bool(settings.photon_url and settings.valhalla_url),
+        "maps": bool(
+            (
+                settings.geocoding_provider == "tomtom"
+                and settings.tomtom_url
+                and settings.tomtom_api_key
+            )
+            or (settings.geocoding_provider == "photon" and settings.photon_url)
+        )
+        and bool(settings.valhalla_url),
         "geocodingProvider": settings.geocoding_provider,
         "routingProvider": settings.routing_provider,
     }

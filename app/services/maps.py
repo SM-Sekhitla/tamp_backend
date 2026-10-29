@@ -145,6 +145,116 @@ def _predictions(features):
     return predictions
 
 
+def _tomtom_headers(version, attributes, session_token=None):
+    require(settings.tomtom_api_key, "TomTom API key is not configured", 503)
+    headers = {
+        "TomTom-Api-Key": settings.tomtom_api_key,
+        "TomTom-Api-Version": str(version),
+        "Attributes": attributes,
+        "Accept": "application/json",
+        "Accept-Language": "en-ZA,en;q=0.9",
+        "User-Agent": "TAMP/1.0 (address search)",
+    }
+    if session_token:
+        headers["Session-Id"] = session_token
+    return headers
+
+
+def _tomtom_place(result, preserve_coordinates=None):
+    position = result.get("position", {})
+    coordinates = position.get("coordinates", [])
+    preferred = next(
+        (
+            item.get("position", {}).get("coordinates", [])
+            for item in result.get("accessPoints", [])
+            if item.get("preferredRouting")
+        ),
+        None,
+    )
+    coordinates = preferred or coordinates
+    require(len(coordinates) >= 2, "TomTom result has no coordinates", 503)
+    address = result.get("address", {})
+    parts = [result.get("title"), *result.get("subtitles", [])]
+    label = ", ".join(dict.fromkeys(str(part).strip() for part in parts if part))
+    if not label:
+        street = " ".join(
+            str(part)
+            for part in [address.get("houseNumber"), address.get("street")]
+            if part
+        )
+        label = ", ".join(
+            dict.fromkeys(
+                str(part)
+                for part in [
+                    street,
+                    address.get("neighborhood") or address.get("municipalitySubdivision"),
+                    address.get("municipality"),
+                    address.get("postalCode"),
+                    address.get("countrySubdivision"),
+                    address.get("country"),
+                ]
+                if part
+            )
+        )
+    require(label, "TomTom result has no address label", 503)
+    lng, lat = preserve_coordinates or coordinates[:2]
+    return {
+        "label": label,
+        "province": address.get("countrySubdivision") or "",
+        "lat": float(lat),
+        "lng": float(lng),
+    }
+
+
+async def _tomtom_autocomplete(data, query):
+    result = await provider_request(
+        "POST",
+        settings.tomtom_url.rstrip("/") + "/maps/orbis/places/suggest",
+        json={
+            "query": query,
+            "maxResults": 10,
+            "filters": {
+                "countryCodesIso2": ["ZA"],
+                "types": ["address", "street", "intersection", "poi", "area"],
+            },
+        },
+        headers=_tomtom_headers(
+            3,
+            "results(id,type,title,subtitles,more)",
+            data.sessionToken,
+        ),
+    )
+    type_path = {
+        "address": "addresses",
+        "street": "streets",
+        "intersection": "intersections",
+        "poi": "pois",
+        "area": "areas",
+    }
+    predictions = []
+    seen = set()
+    for item in result.get("results", []):
+        item_id = item.get("id")
+        path_type = type_path.get(item.get("type"))
+        title = str(item.get("title") or "").strip()
+        if not item_id or not path_type or not title:
+            continue
+        subtitles = [str(value).strip() for value in item.get("subtitles", []) if value]
+        display = ", ".join(dict.fromkeys([title, *subtitles]))
+        normalized = display.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        predictions.append(
+            {
+                "id": f"tomtom:{path_type}:{quote(str(item_id), safe='')}",
+                "primary": title,
+                "secondary": ", ".join(subtitles),
+            }
+        )
+    return predictions
+
+
 def _decode_polyline6(encoded):
     """Decode Valhalla's six-decimal polyline into GeoJSON [lng, lat] points."""
     coordinates = []
@@ -169,9 +279,21 @@ def _decode_polyline6(encoded):
 
 
 async def autocomplete(data):
+    query = " ".join(data.query.strip().split())
+    if settings.geocoding_provider == "tomtom":
+        # TomTom requires one UUID to follow the complete suggest -> details
+        # journey. Do not serve suggestions created under another session.
+        cache_key = f"tomtom:{data.sessionToken or 'anonymous'}:{query.casefold()}"
+        cached = _autocomplete_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < 60:
+            return cached[1]
+        predictions = await _tomtom_autocomplete(data, query)
+        if len(_autocomplete_cache) >= 500:
+            _autocomplete_cache.clear()
+        _autocomplete_cache[cache_key] = (time.monotonic(), predictions)
+        return predictions
     if settings.geocoding_provider != "photon" or not settings.photon_url:
         return _local_autocomplete(data.query)
-    query = " ".join(data.query.strip().split())
     cache_key = query.casefold()
     cached = _autocomplete_cache.get(cache_key)
     if cached and time.monotonic() - cached[0] < 60:
@@ -229,6 +351,27 @@ async def autocomplete(data):
 
 
 async def details(data):
+    if data.placeId.startswith("tomtom:"):
+        require(settings.geocoding_provider == "tomtom", "TomTom geocoding is not active", 409)
+        try:
+            _, path_type, encoded_id = data.placeId.split(":", 2)
+        except ValueError as exc:
+            raise AppError("Place not found", 404) from exc
+        require(
+            path_type in {"addresses", "streets", "intersections", "pois", "areas"},
+            "Place not found",
+            404,
+        )
+        result = await provider_request(
+            "GET",
+            f"{settings.tomtom_url.rstrip('/')}/maps/orbis/places/details/{path_type}/{quote(unquote(encoded_id), safe='')}",
+            headers=_tomtom_headers(
+                3,
+                "id,type,title,subtitles,position,address,accessPoints",
+                data.sessionToken,
+            ),
+        )
+        return _tomtom_place(result)
     if data.placeId.startswith("photon:"):
         try:
             return json.loads(unquote(data.placeId[7:]))
@@ -242,6 +385,22 @@ async def details(data):
 
 
 async def reverse(data):
+    if settings.geocoding_provider == "tomtom":
+        result = await provider_request(
+            "GET",
+            settings.tomtom_url.rstrip("/") + "/maps/orbis/places/reverseGeocode",
+            params={
+                "position": f"{data.lng},{data.lat}",
+                "radiusInMeters": 250,
+            },
+            headers=_tomtom_headers(
+                2,
+                "results(id,type,title,position,address,accessPoints)",
+            ),
+        )
+        results = result.get("results", [])
+        require(results, "No address was found near your current location", 404)
+        return _tomtom_place(results[0], preserve_coordinates=(data.lng, data.lat))
     if settings.geocoding_provider != "photon" or not settings.photon_url:
         return {
             "label": f"Current location ({data.lat:.6f}, {data.lng:.6f})",

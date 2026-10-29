@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True
     geocoding_provider: str = "photon"
     photon_url: str = "https://photon.komoot.io"
+    tomtom_url: str = "https://api.tomtom.com"
+    tomtom_api_key: str = ""
     routing_provider: str = "valhalla"
     valhalla_url: str = "https://valhalla1.openstreetmap.de"
     match_offer_minutes: int = 30
@@ -85,6 +87,8 @@ class Settings(BaseSettings):
                 )
             if "*" in self.allowed_hosts or "*" in self.cors_origins:
                 raise ValueError("Production requires explicit host and origin allowlists")
+            if self.geocoding_provider == "tomtom" and not self.tomtom_api_key:
+                raise ValueError("Production TomTom geocoding requires TOMTOM_API_KEY")
         return self
 
 
