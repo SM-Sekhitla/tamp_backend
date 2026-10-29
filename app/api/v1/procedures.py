@@ -113,7 +113,9 @@ group("phone", [("check", d.Phone, False, True)])
 group(
     "matching",
     [
-        ("score", d.Score, False, False),
+        # Score is read-only, but its full domain payload can exceed safe URL
+        # lengths. Register it as POST so the payload is carried in the body.
+        ("score", d.Score, True, False),
         ("bodyTypesForCargo", d.CargoInput, False, False),
         ("roadDistanceKm", d.Distance, False, False),
     ],
