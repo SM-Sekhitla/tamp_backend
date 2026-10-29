@@ -185,12 +185,16 @@ async def autocomplete(data):
         "lon": 22.9375,
         "location_bias_scale": 0.2,
     }
-    result = await provider_request(
-        "GET",
-        settings.photon_url.rstrip("/") + "/api",
-        params={"q": query, **common},
-        headers={"User-Agent": "TAMP/1.0 (address search)"},
-    )
+    try:
+        result = await provider_request(
+            "GET",
+            settings.photon_url.rstrip("/") + "/api",
+            params={"q": query, **common},
+            headers={"User-Agent": "TAMP/1.0 (address search)"},
+        )
+    except AppError:
+        # Keep major-city selection usable during a temporary provider outage.
+        return _local_autocomplete(query)
     features = list(result.get("features", []))
     numbered = re.match(r"^\s*([0-9]+[A-Za-z]?(?:[-/][0-9A-Za-z]+)?)\s+([^,]+)(?:,\s*(.+))?$", query)
     if numbered:

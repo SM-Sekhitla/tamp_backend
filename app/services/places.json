@@ -29,6 +29,12 @@
     "lat": -25.7479,
     "lng": 28.2293
   },
+  "polokwane": {
+    "label": "Polokwane",
+    "province": "LP",
+    "lat": -23.9058,
+    "lng": 29.4614
+  },
   "musina": {
     "label": "Musina",
     "province": "LP",
