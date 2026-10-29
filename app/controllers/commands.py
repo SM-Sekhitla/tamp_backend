@@ -581,6 +581,7 @@ def handle(action, data, db, request, response, party):
                 matchId=match["id"],
                 status="SCHEDULED",
                 events=[dict(status="SCHEDULED", at=iso(), byUserId=party.id)],
+                livePosition=None,
                 simulatedPosition=None,
                 progressPct=0,
                 currentStopIndex=0,

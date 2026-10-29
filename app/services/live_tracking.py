@@ -236,7 +236,26 @@ async def save_position(db: AsyncSession, trip_id: str, party, data):
     }
     # Keep snapshots and public tracking links current while the normalized
     # history table remains the source of truth for location history.
-    trip_row.data = {**trip_row.data, "simulatedPosition": {"lat": data.lat, "lng": data.lng, "updatedAt": recorded.isoformat()}}
+    live_position = {
+        "lat": data.lat,
+        "lng": data.lng,
+        "accuracyM": data.accuracyM,
+        "speedKph": data.speedKph,
+        "heading": data.heading,
+        "recordedAt": recorded.isoformat(),
+        "updatedAt": recorded.isoformat(),
+    }
+    # livePosition is canonical. Keep the legacy field temporarily so an older
+    # deployed frontend remains usable during a rolling deployment.
+    trip_row.data = {
+        **trip_row.data,
+        "livePosition": live_position,
+        "simulatedPosition": {
+            "lat": data.lat,
+            "lng": data.lng,
+            "updatedAt": recorded.isoformat(),
+        },
+    }
     geofence_event = await update_geofences(
         db, trip_row, truck, _load_row.data, data.lat, data.lng, recorded
     )
