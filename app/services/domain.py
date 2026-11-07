@@ -104,35 +104,74 @@ def snapshot(db, party):
         return {**all_rows, "parties": [party_payload(p) for p in db.scalars(select(Party))]}
     pid = party.id
     organisation_users = organisation_user_ids(db, party)
-    loads = {
-        d["id"]
-        for d in all_rows["loads"]
-        if d["ownerId"] in organisation_users or (party.data["role"] == "TRANSPORTER" and d["status"] == "POSTED")
-    }
-    trucks = {
-        d["id"]
-        for d in all_rows["trucks"]
-        if d["transporterId"] in organisation_users
-        or d.get("driverId") == pid
-        or (party.data["role"] == "FREIGHT_OWNER" and d["status"] == "AVAILABLE")
-    }
-    own_vehicle_ids = {
-        d["id"] for d in all_rows["vehicles"] if d["ownerId"] in organisation_users
-    }
-    own_trucks = {
-        d["id"] for d in all_rows["trucks"] if d["transporterId"] in organisation_users or d.get("driverId") == pid
-    }
-    matches = {
-        d["id"]
-        for d in all_rows["matches"]
-        if any(item["id"] == d["loadId"] and item["ownerId"] in organisation_users for item in all_rows["loads"])
-        or d["truckPostingId"] in own_trucks
-    }
-    for m in all_rows["matches"]:
-        if m["id"] in matches:
-            loads.add(m["loadId"])
-            trucks.add(m["truckPostingId"])
-    trips = {d["id"] for d in all_rows["trips"] if d["matchId"] in matches}
+    driver_scope = party.data["role"] == "DRIVER"
+    if driver_scope:
+        # A fleet driver sees only jobs explicitly offered or assigned to them.
+        # Organisation membership must never expose the carrier's marketplace,
+        # commercial matches, other vehicles, or other drivers' trips.
+        driver_trip_ids = {
+            d["tripId"]
+            for d in all_rows["dispatches"]
+            if d.get("driverId") == pid and d.get("status") in {"OFFERED", "ACCEPTED"}
+        }
+        driver_trip_ids.update(
+            d["id"] for d in all_rows["trips"] if d.get("assignedDriverId") == pid
+        )
+        trips = {d["id"] for d in all_rows["trips"] if d["id"] in driver_trip_ids}
+        trip_match_ids = {
+            d["matchId"] for d in all_rows["trips"] if d["id"] in trips
+        }
+        matches = {d["id"] for d in all_rows["matches"] if d["id"] in trip_match_ids}
+        loads = {d["loadId"] for d in all_rows["matches"] if d["id"] in matches}
+        matched_trucks = {
+            d["truckPostingId"] for d in all_rows["matches"] if d["id"] in matches
+        }
+        assigned_trucks = {
+            d["id"] for d in all_rows["trucks"] if d.get("driverId") == pid
+        }
+        trucks = matched_trucks | assigned_trucks
+        own_trucks = set(trucks)
+        own_vehicle_ids = {
+            d.get("vehicleId")
+            for d in all_rows["trucks"]
+            if d["id"] in own_trucks and d.get("vehicleId")
+        }
+    else:
+        loads = {
+            d["id"]
+            for d in all_rows["loads"]
+            if d["ownerId"] in organisation_users
+            or (party.data["role"] == "TRANSPORTER" and d["status"] == "POSTED")
+        }
+        trucks = {
+            d["id"]
+            for d in all_rows["trucks"]
+            if d["transporterId"] in organisation_users
+            or d.get("driverId") == pid
+            or (party.data["role"] == "FREIGHT_OWNER" and d["status"] == "AVAILABLE")
+        }
+        own_vehicle_ids = {
+            d["id"] for d in all_rows["vehicles"] if d["ownerId"] in organisation_users
+        }
+        own_trucks = {
+            d["id"]
+            for d in all_rows["trucks"]
+            if d["transporterId"] in organisation_users or d.get("driverId") == pid
+        }
+        matches = {
+            d["id"]
+            for d in all_rows["matches"]
+            if any(
+                item["id"] == d["loadId"] and item["ownerId"] in organisation_users
+                for item in all_rows["loads"]
+            )
+            or d["truckPostingId"] in own_trucks
+        }
+        for m in all_rows["matches"]:
+            if m["id"] in matches:
+                loads.add(m["loadId"])
+                trucks.add(m["truckPostingId"])
+        trips = {d["id"] for d in all_rows["trips"] if d["matchId"] in matches}
     invoices = {d["id"] for d in all_rows["invoices"] if d["tripId"] in trips}
     result = {k: [] for k in COLLECTIONS}
     for k, ds in all_rows.items():
@@ -165,15 +204,15 @@ def snapshot(db, party):
                     for item in all_rows["loads"]
                 )
             if k in {"fuelLogs", "maintenance"}:
-                visible = d["truckId"] in own_trucks
+                visible = not driver_scope and d["truckId"] in own_trucks
             if k == "audit":
                 visible = (
                     d["actorId"] == pid or d["subjectId"] in loads | own_trucks | matches | trips
                 )
             if visible:
                 result[k].append(d)
-    related = set(organisation_users)
-    contacts = set(organisation_users)
+    related = {pid} if driver_scope else set(organisation_users)
+    contacts = {pid} if driver_scope else set(organisation_users)
     for t in result["trucks"]:
         related.add(t["transporterId"])
         if t.get("driverId"):
@@ -302,8 +341,11 @@ def sync(db, party, delta):
                     continue
                 data = sanitize_load(db, party, data, old)
             elif k == "trucks":
+                from app.services.rbac import require_permission
+
+                require_permission(db, party, "trucks.manage")
                 require(
-                    party.data["role"] in ["TRANSPORTER", "DRIVER", "ADMIN"]
+                    party.data["role"] in ["TRANSPORTER", "ADMIN"]
                     and (data["transporterId"] in organisation_users or is_admin(party))
                 )
                 require(not old or old["transporterId"] == data["transporterId"])
@@ -342,6 +384,23 @@ def sync(db, party, delta):
                         and (driver.data["role"] == "DRIVER" or owner_driver)
                         and driver.data["verification"] == "VERIFIED",
                         "Choose a verified driver",
+                        400,
+                    )
+                    organisation_id = (
+                        row.organisation_id
+                        if row is not None
+                        else db.info.get("active_organisation_id")
+                    )
+                    driver_membership = db.scalar(
+                        select(OrganisationMembership).where(
+                            OrganisationMembership.organisation_id == organisation_id,
+                            OrganisationMembership.user_id == driver.id,
+                            OrganisationMembership.status == "ACTIVE",
+                        )
+                    )
+                    require(
+                        owner_driver or driver_membership is not None,
+                        "Choose a driver from this truck organisation",
                         400,
                     )
                 from app.services.storage import own_upload

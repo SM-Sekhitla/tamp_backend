@@ -97,6 +97,42 @@ def accounts():
             party.data = {**party.data, "verification": "VERIFIED"}
             users[key] = dict(party.data)
 
+        # The workflow driver is an employee of the carrier organisation. This
+        # mirrors production dispatch rules: verified drivers must be explicit
+        # members of the fleet that assigns them work.
+        from sqlalchemy import select
+
+        from app.core.security import new_id, now
+        from app.db.models import OrganisationMembership, UserRole
+        from app.services.rbac import ROLE_IDS
+
+        carrier_membership = db.scalar(
+            select(OrganisationMembership).where(
+                OrganisationMembership.user_id == users["carrier"]["id"],
+                OrganisationMembership.is_primary.is_(True),
+            )
+        )
+        db.add(
+            OrganisationMembership(
+                id=new_id("OM"),
+                organisation_id=carrier_membership.organisation_id,
+                user_id=users["driver"]["id"],
+                status="ACTIVE",
+                is_primary=False,
+                created_at=now(),
+            )
+        )
+        db.add(
+            UserRole(
+                id=new_id("UR"),
+                user_id=users["driver"]["id"],
+                role_id=ROLE_IDS["DRIVER"],
+                organisation_id=carrier_membership.organisation_id,
+                assigned_by=users["carrier"]["id"],
+                created_at=now(),
+            )
+        )
+
     db_call(create_accounts)
     return users
 

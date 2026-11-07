@@ -1,7 +1,11 @@
+from sqlalchemy import select
+
 from app.controllers.auth import find_email
 from app.core.errors import require
 from app.core.security import iso, new_id
+from app.db.models import OrganisationMembership
 from app.services.domain import audit, lock_domain
+from app.services.rbac import require_permission
 from app.services.records import needed, put, rows
 
 
@@ -16,7 +20,8 @@ def handle(action, data, db, request, response, party):
     trip = needed(db, "trips", values["tripId"], True).data
     require(trip["status"] == "SCHEDULED", "Dispatch can only change before a trip starts", 409)
     match = needed(db, "matches", trip["matchId"]).data
-    truck = needed(db, "trucks", match["truckPostingId"], True).data
+    truck_row = needed(db, "trucks", match["truckPostingId"], True)
+    truck = truck_row.data
     load = needed(db, "loads", match["loadId"]).data
     active = [
         r.data
@@ -27,7 +32,16 @@ def handle(action, data, db, request, response, party):
     operation = values["action"]
 
     if operation == "ASSIGN":
-        require(party.id == truck["transporterId"], "Only the carrier may dispatch this job", 403)
+        require_permission(db, party, "dispatch.manage")
+        organisation_id = truck_row.organisation_id or db.info.get("active_organisation_id")
+        manager_membership = db.scalar(
+            select(OrganisationMembership).where(
+                OrganisationMembership.organisation_id == organisation_id,
+                OrganisationMembership.user_id == party.id,
+                OrganisationMembership.status == "ACTIVE",
+            )
+        )
+        require(manager_membership is not None, "Only this truck organisation may dispatch the job", 403)
         require(values.get("driverEmail"), "Driver email is required", 400)
         driver = find_email(db, values["driverEmail"])
         owner_driver = (
@@ -42,6 +56,18 @@ def handle(action, data, db, request, response, party):
             and driver.data["verification"] == "VERIFIED",
             "Verified driver not found",
             404,
+        )
+        driver_membership = db.scalar(
+            select(OrganisationMembership).where(
+                OrganisationMembership.organisation_id == organisation_id,
+                OrganisationMembership.user_id == driver.id,
+                OrganisationMembership.status == "ACTIVE",
+            )
+        )
+        require(
+            owner_driver or driver_membership is not None,
+            "Select a driver from this truck organisation",
+            400,
         )
         if current:
             put(db, "dispatches", {**current, "status": "CANCELLED", "cancelledAt": iso(), "cancelledById": party.id})
@@ -71,7 +97,16 @@ def handle(action, data, db, request, response, party):
                 put(db, "trucks", updated_truck)
             notify(db, truck["transporterId"], trip["id"], f"Driver {status.lower()} assignment", load["id"])
         else:
-            require(party.id == truck["transporterId"], "Only the carrier may cancel dispatch", 403)
+            require_permission(db, party, "dispatch.manage")
+            organisation_id = truck_row.organisation_id or db.info.get("active_organisation_id")
+            manager_membership = db.scalar(
+                select(OrganisationMembership).where(
+                    OrganisationMembership.organisation_id == organisation_id,
+                    OrganisationMembership.user_id == party.id,
+                    OrganisationMembership.status == "ACTIVE",
+                )
+            )
+            require(manager_membership is not None, "Only this truck organisation may cancel dispatch", 403)
             dispatch = {**current, "status": "CANCELLED", "cancelledAt": iso(), "cancelledById": party.id, "timeline": [*current.get("timeline", []), {"status": "CANCELLED", "at": iso(), "byUserId": party.id, "note": values.get("note")} ]}
             put(db, "dispatches", dispatch)
             updated_truck = {**truck, "driverId": None}
