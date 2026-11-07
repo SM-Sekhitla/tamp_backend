@@ -240,8 +240,10 @@ def _execute_sync(sync_db, name, payload, method, request, response):
     data = procedure.schema.model_validate(payload or {})
     party = current_party(sync_db, request, not procedure.public)
     if party is not None:
-        from app.services.rbac import enforce_procedure_permission
+        from app.services.rbac import enforce_procedure_permission, enforce_verification_access
 
+        if not procedure.public:
+            enforce_verification_access(party, name, procedure.mutation)
         enforce_procedure_permission(sync_db, party, name)
     module = name.split(".", 1)[0]
     module_logger = logging.getLogger(f"tamp.module.{module}")
@@ -435,6 +437,10 @@ async def upload(
 
     def store_upload(sync_db):
         party = current_party(sync_db, request)
+        from app.services.rbac import enforce_verification_access
+
+        if kind not in {"AVATAR", "KYC"}:
+            enforce_verification_access(party, "uploads.create", True)
         return store(sync_db, party, content, file.filename, kind)
 
     result = await db.run_sync(store_upload)

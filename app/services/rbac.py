@@ -229,7 +229,7 @@ def primary_organisation_id(db, user):
 def permission_codes(db, user, organisation_id=None):
     if user is None:
         return set()
-    return set(
+    effective = set(
         db.scalars(
             select(RolePermission.permission_code)
             .join(UserRole, UserRole.role_id == RolePermission.role_id)
@@ -240,6 +240,16 @@ def permission_codes(db, user, organisation_id=None):
             )
         )
     )
+    if (
+        user.data.get("role") not in {"ADMIN", "system_super_user"}
+        and user.data.get("verification") != "VERIFIED"
+    ):
+        return {
+            code
+            for code in effective
+            if code.endswith(".read") or code == "maps.use"
+        }
+    return effective
 
 
 def organisation_payloads(db, user):
@@ -340,3 +350,39 @@ def enforce_procedure_permission(db, user, procedure_name):
     permission = PROCEDURE_PERMISSIONS.get(procedure_name)
     if permission:
         require_permission(db, user, permission)
+
+
+UNVERIFIED_ALLOWED_MUTATIONS = {
+    "auth.logout",
+    "auth.changePassword",
+    "auth.logoutOtherSessions",
+    "auth.requestEmailChange",
+    "auth.confirmEmailChange",
+    "auth.updateProfile",
+    "parties.completeOnboarding",
+    "parties.uploadKyc",
+    "users.completeOnboarding",
+    "users.uploadKyc",
+    "organisations.switch",
+    "messages.markRead",
+    "notifications.markRead",
+    # This endpoint uses POST only because its matching payload is too large
+    # for a query string; it does not change persisted state.
+    "matching.score",
+}
+
+
+def enforce_verification_access(user, procedure_name, mutation):
+    if (
+        not mutation
+        or user is None
+        or user.data.get("role") in {"ADMIN", "system_super_user"}
+        or user.data.get("verification") == "VERIFIED"
+        or procedure_name in UNVERIFIED_ALLOWED_MUTATIONS
+    ):
+        return
+    require(
+        False,
+        "Your account is still under review. You can browse the system, but changes are available after verification.",
+        403,
+    )
