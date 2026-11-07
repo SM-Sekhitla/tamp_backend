@@ -1,9 +1,11 @@
+import secrets
+
 from sqlalchemy import delete, select
 
 from app.api.deps import COOKIE, is_admin, party_payload
 from app.controllers.auth import find_email
 from app.core.errors import require
-from app.core.security import new_id, now, token_hash
+from app.core.security import iso, new_id, now, passwords, token_hash
 from app.db.models import Organisation, OrganisationMembership, Session, User, UserRole
 from app.services.rbac import ROLE_IDS, require_permission
 
@@ -196,7 +198,52 @@ def handle(action, data, db, request, response, party):
     )
     require(values["role"] in _allowed_member_roles(organisation, party), "Role is not valid for this organisation", 400)
     user = find_email(db, values["email"])
-    require(user is not None, "Registered user not found", 404)
+    temporary_password = None
+    created = False
+    if user is None:
+        require(
+            values["role"] == "DRIVER" and values.get("createAccount"),
+            "This person does not have a TAMP account yet",
+            404,
+        )
+        require(values.get("contactName"), "Driver name is required", 400)
+        temporary_password = secrets.token_urlsafe(18)
+        ident = new_id("P")
+        email = str(values["email"]).lower()
+        user_data = {
+            "id": ident,
+            "role": "DRIVER",
+            "email": email,
+            "contactName": values["contactName"].strip(),
+            "companyName": organisation.name,
+            "phone": values.get("phone", ""),
+            "province": "",
+            "verification": "VERIFIED",
+            "ratingAvg": None,
+            "ratingCount": 0,
+            "suspended": False,
+            "createdAt": iso(),
+            "onboardingComplete": True,
+            "onboardingUserType": "DRIVER",
+            "managedByOrganisationId": organisation.id,
+            "temporaryPassword": True,
+        }
+        user = User(
+            id=ident,
+            email=email,
+            password_hash=passwords.hash(temporary_password),
+            data=user_data,
+            onboarding={"userType": "DRIVER", "managedAccount": True},
+        )
+        db.add(user)
+        db.flush()
+        created = True
+    if values["role"] == "DRIVER":
+        require(
+            user.data.get("role") == "DRIVER",
+            "This email belongs to a different type of TAMP account",
+            409,
+        )
     membership = _membership(db, user.id, organisation.id)
     if membership is None:
         membership = OrganisationMembership(
@@ -204,7 +251,7 @@ def handle(action, data, db, request, response, party):
             organisation_id=organisation.id,
             user_id=user.id,
             status="ACTIVE",
-            is_primary=False,
+            is_primary=created,
             created_at=now(),
         )
         db.add(membership)
@@ -227,4 +274,9 @@ def handle(action, data, db, request, response, party):
                 created_at=now(),
             )
         )
-    return {"ok": True, "userId": user.id}
+    return {
+        "ok": True,
+        "userId": user.id,
+        "created": created,
+        **({"temporaryPassword": temporary_password} if temporary_password else {}),
+    }

@@ -123,6 +123,7 @@ def handle(action, data, db, request, response, party):
             400,
         )
         party.password_hash = passwords.hash(d["newPassword"])
+        party.data = {**party.data, "temporaryPassword": False}
         count = revoke(db, party)
         set_session(db, party, response)
         return {"ok": True, "signedOut": max(0, count - 1)}

@@ -117,6 +117,9 @@ class OrganisationCreate(Input):
 class OrganisationMemberAdd(OrganisationId):
     email: EmailStr
     role: Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER", "CARGO_OPERATOR", "DISPATCHER"]
+    contactName: str | None = Field(default=None, min_length=2, max_length=200)
+    phone: str | None = Field(default=None, max_length=40)
+    createAccount: bool = False
 
 
 class OrganisationUpdate(OrganisationId):
