@@ -92,6 +92,7 @@ def handle(action, data, db, request, response, party):
                 "roleIds": [row.role_id for row in role_rows if row.user_id == membership.user_id],
             }
             for membership in memberships
+            if db.get(User, membership.user_id).data.get("role") != "system_super_user"
         ]
     if action == "create":
         require(
@@ -109,27 +110,9 @@ def handle(action, data, db, request, response, party):
         )
         db.add(organisation)
         db.flush()
-        membership = OrganisationMembership(
-            id=new_id("OM"),
-            organisation_id=organisation.id,
-            user_id=party.id,
-            status="ACTIVE",
-            is_primary=False,
-            created_at=now(),
-        )
-        db.add(membership)
-        role_id = ROLE_IDS.get(party.data.get("role"), ROLE_IDS["DRIVER"])
-        db.add(
-            UserRole(
-                id=new_id("UR"),
-                user_id=party.id,
-                role_id=role_id,
-                organisation_id=organisation.id,
-                assigned_by=party.id,
-                created_at=now(),
-            )
-        )
-        return _payload(organisation, membership)
+        # Platform administrators oversee tenants through platform permissions;
+        # they are not operational members of every tenant they create.
+        return _payload(organisation)
     if action == "switch":
         organisation = _require_access(
             db, party, values["organisationId"], "organisations.read"
