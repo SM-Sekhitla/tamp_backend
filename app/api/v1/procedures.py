@@ -12,6 +12,7 @@ from app.controllers import (
 )
 from app.controllers import dispatch as dispatch_controller
 from app.controllers import organisations as organisations_controller
+from app.controllers import vehicles as vehicles_controller
 from app.schemas import auth as a
 from app.schemas import domain as d
 from app.services.domain import snapshot, sync
@@ -85,6 +86,7 @@ group(
         ("switch", a.OrganisationId, True, False),
     ],
 )
+group("vehicles", [("setVerification", a.VehicleVerification, True, False)])
 group(
     "commands",
     [
@@ -174,6 +176,7 @@ def dispatch(name, data, db, request, response, party):
         "dispatch": dispatch_controller,
         "webhooks": webhooks,
         "organisations": organisations_controller,
+        "vehicles": vehicles_controller,
     }
     if prefix in controllers:
         return controllers[prefix].handle(action, data, db, request, response, party)

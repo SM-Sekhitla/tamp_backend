@@ -130,6 +130,11 @@ class OrganisationVerification(OrganisationId):
     status: Literal["PENDING", "VERIFIED", "REJECTED"]
 
 
+class VehicleVerification(Input):
+    truckId: str = Field(min_length=1, max_length=80)
+    status: Literal["PENDING", "VERIFIED", "REJECTED"]
+
+
 class OrganisationMemberRoles(OrganisationId):
     userId: str
     roles: list[Literal["FREIGHT_OWNER", "TRANSPORTER", "DRIVER", "CARGO_OPERATOR", "DISPATCHER"]] = Field(
