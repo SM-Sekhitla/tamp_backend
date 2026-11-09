@@ -304,6 +304,7 @@ PROCEDURE_PERMISSIONS = {
     "organisations.create": "organisations.create",
     "organisations.addMember": "organisations.members.manage",
     "organisations.update": "organisations.update",
+    "organisations.setVerification": "platform.admin",
     "organisations.setMemberRoles": "organisations.members.manage",
     "organisations.removeMember": "organisations.members.manage",
     "organisations.switch": "organisations.read",

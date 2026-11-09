@@ -128,6 +128,22 @@ def handle(action, data, db, request, response, party):
         )
         organisation.name = values["name"].strip()
         return _payload(organisation, _membership(db, party.id, organisation.id))
+    if action == "setVerification":
+        require(
+            party.data.get("role") == "system_super_user",
+            "Only the system super user can verify organisations",
+            403,
+        )
+        organisation = _require_access(
+            db, party, values["organisationId"], "platform.admin"
+        )
+        organisation.verification = values["status"]
+        organisation.data = {
+            **(organisation.data or {}),
+            "verificationUpdatedAt": now().isoformat(),
+            "verificationUpdatedBy": party.id,
+        }
+        return _payload(organisation)
     if action == "setMemberRoles":
         organisation = _require_access(
             db, party, values["organisationId"], "organisations.members.manage"

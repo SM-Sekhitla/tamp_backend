@@ -79,6 +79,7 @@ group(
         ("create", a.OrganisationCreate, True, False),
         ("addMember", a.OrganisationMemberAdd, True, False),
         ("update", a.OrganisationUpdate, True, False),
+        ("setVerification", a.OrganisationVerification, True, False),
         ("setMemberRoles", a.OrganisationMemberRoles, True, False),
         ("removeMember", a.OrganisationMemberRemove, True, False),
         ("switch", a.OrganisationId, True, False),

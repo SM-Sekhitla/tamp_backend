@@ -48,16 +48,35 @@ def money(d):
     return {"amount": quote(d)["amount"], "currency": "ZAR", "vat": "incl"}
 
 
+def _normalise_place(value):
+    return " ".join(str(value or "").casefold().replace(",", " ").split())
+
+
+def _capacity_score(utilisation):
+    """Reward useful capacity without a discontinuity at a full truck."""
+    if utilisation <= 0.8:
+        return 25 * max(0, utilisation) / 0.8
+    if utilisation <= 0.92:
+        return 25
+    # Retain a small safety-headroom preference, declining smoothly to 22.5.
+    return max(22.5, 25 - 2.5 * ((min(utilisation, 1) - 0.92) / 0.08))
+
+
 def score(load, truck, operator, owner):
     km = distance(load["origin"], truck["currentLocation"])
     start = max(dt(load["pickupWindow"]["from"]), dt(truck["availableFrom"]))
     end = min(dt(load["pickupWindow"]["to"]), dt(truck["availableTo"]))
+    licence_expiry = truck.get("licenceExpiry")
+    licence_valid = bool(licence_expiry) and dt(licence_expiry) >= start
+    documents_complete = len(truck.get("documents", [])) >= 3
     tests = [
         ("R-CAPACITY", "Payload capacity", truck["payloadCapacityKg"] >= load["weightKg"]),
         ("R-BODY", "Compatible equipment", truck["bodyType"] in BODIES[load["cargoType"]]),
         ("R-WINDOW", "Availability overlaps pickup", end >= start),
         ("R-RADIUS", "Within 150 km", km <= 150),
         ("R-STATUS", "Truck available", truck["status"] == "AVAILABLE"),
+        ("R-LICENCE", "Vehicle licence valid through pickup", licence_valid),
+        ("R-DOCUMENTS", "Required vehicle documents uploaded", documents_complete),
         (
             "R-ACTIVE",
             "Active verified parties",
@@ -69,10 +88,12 @@ def score(load, truck, operator, owner):
     ]
     utilisation = load["weightKg"] / truck["payloadCapacityKg"]
     lane = any(
-        item["origin"] == load["origin"]["label"]
-        and item["destination"] == load["destination"]["label"]
+        _normalise_place(item["origin"]) == _normalise_place(load["origin"]["label"])
+        and _normalise_place(item["destination"])
+        == _normalise_place(load["destination"]["label"])
         for item in truck.get("preferredLanes", [])
     )
+    overlap_hours = max(0, (end - start).total_seconds() / 3600)
     values = [
         (
             "R-PROXIMITY",
@@ -85,15 +106,15 @@ def score(load, truck, operator, owner):
             "R-CAPACITY-FIT",
             "Capacity suits load",
             25,
-            25 * min(1, utilisation / 0.8) * (0.9 if utilisation >= 1 else 1),
-            f"{utilisation:.0%} utilisation",
+            _capacity_score(utilisation),
+            f"{utilisation:.0%} utilisation; 80–92% is the preferred operating range",
         ),
         (
             "R-TIMING",
             "Pickup timing",
             20,
-            20 * max(0, min(1, (end - start).total_seconds() / 21600)),
-            "Pickup overlap, up to 6 hours",
+            20 * max(0, min(1, overlap_hours / 6)),
+            f"{overlap_hours:.1f} hours of pickup-window overlap; full score at 6 hours",
         ),
         (
             "R-LANE",
@@ -104,7 +125,7 @@ def score(load, truck, operator, owner):
             else 7.5
             if truck["currentLocation"]["province"] == load["destination"]["province"]
             else 0,
-            "Lane or destination province fit",
+            "Exact saved lane" if lane else "Destination province fit" if truck["currentLocation"]["province"] == load["destination"]["province"] else "No preferred-lane fit",
         ),
         (
             "R-RATING",
