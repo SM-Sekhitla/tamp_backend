@@ -63,6 +63,25 @@ class LoadStop(Input):
     proofId: str | None = Field(default=None, max_length=80)
 
 
+class LoadRecurrence(Input):
+    scheduleId: str = Field(min_length=1, max_length=80)
+    frequency: Literal["WEEKLY", "SPECIFIC_DAYS"]
+    daysOfWeek: list[int] = Field(min_length=1, max_length=7)
+    nextPostAt: datetime
+    endsOn: datetime | None = None
+    active: bool = True
+    isTemplate: bool = True
+    occurrenceDate: datetime | None = None
+
+    @model_validator(mode="after")
+    def valid_schedule(self):
+        if len(set(self.daysOfWeek)) != len(self.daysOfWeek) or any(day < 0 or day > 6 for day in self.daysOfWeek):
+            raise ValueError("Recurring days must be unique values from Monday to Sunday")
+        if self.nextPostAt.tzinfo is None or (self.endsOn and self.endsOn.tzinfo is None):
+            raise ValueError("Recurring dates must include a timezone")
+        return self
+
+
 class LoadInput(Input):
     ownerId: str
     cargoType: Cargo
@@ -75,6 +94,7 @@ class LoadInput(Input):
     deliveryBy: datetime
     specialRequirements: str | None = Field(default=None, max_length=4000)
     stops: list[LoadStop] = Field(default_factory=list, max_length=20)
+    recurrence: LoadRecurrence | None = None
 
     @model_validator(mode="after")
     def dates(self):

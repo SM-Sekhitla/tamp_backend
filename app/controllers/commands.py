@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.errors import require
 from app.core.security import iso, new_id, now
 from app.db.models import Party, VehiclePosition
-from app.services.domain import audit, lock_domain
+from app.services.domain import audit, lock_domain, organisation_user_ids
 from app.services.maps import verify_route_token
 from app.services.matching import dt, score
 from app.services.records import needed, put, rows
@@ -252,14 +252,20 @@ def handle(action, data, db, request, response, party):
         require(trip is not None, "Trip not found", 404)
         require(trip["status"] not in ["DELIVERED", "COMPLETED", "CANCELLED"], "Trip is closed", 409)
         assigned = party.id == truck.get("driverId")
-        carrier = party.id == truck["transporterId"]
+        carrier = (
+            party.data.get("role") == "TRANSPORTER"
+            and truck["transporterId"] in organisation_user_ids(db, party)
+        )
         owner = party.id == load["ownerId"]
         require(
             assigned or carrier or owner,
             "Only a trip party may report an operational issue",
         )
         if action == "cancelTrip":
-            require(owner or carrier, "Only the load owner or carrier may cancel this trip")
+            require(
+                owner or carrier or assigned,
+                "Only the load owner, carrier or assigned driver may cancel this trip",
+            )
             kind, description = "CANCELLATION", d["reason"].strip()
         else:
             kind, description = d["kind"], d["description"].strip()
@@ -307,6 +313,7 @@ def handle(action, data, db, request, response, party):
             counterpart_ids.discard(party.id)
         if action == "cancelTrip":
             before_pickup = trip["status"] in ["SCHEDULED", "EN_ROUTE_PICKUP", "AT_PICKUP"]
+            carrier_side = carrier or assigned
             put(
                 db,
                 "trips",
@@ -320,7 +327,12 @@ def handle(action, data, db, request, response, party):
                     ],
                     "events": [
                         *trip["events"],
-                        {"status": "CANCELLED", "at": iso(), "byUserId": party.id},
+                        {
+                            "status": "CANCELLED",
+                            "at": iso(),
+                            "byUserId": party.id,
+                            "reason": description,
+                        },
                     ],
                 },
             )
@@ -328,7 +340,7 @@ def handle(action, data, db, request, response, party):
             put(
                 db,
                 "loads",
-                {**load, "status": "POSTED" if carrier and before_pickup else "CANCELLED"},
+                {**load, "status": "POSTED" if carrier_side and before_pickup else "CANCELLED"},
             )
             put(db, "trucks", {**truck, "status": "AVAILABLE" if before_pickup else "OFFLINE"})
             event, title = "TRIP_CANCELLED", "Trip cancelled"

@@ -1,5 +1,5 @@
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.core.config import settings
 
@@ -16,7 +16,10 @@ BODIES = {
 
 
 def dt(value):
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    # Legacy licence fields may contain YYYY-MM-DD rather than an ISO timestamp.
+    # Normalise them before comparing with timezone-aware pickup windows.
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def distance(a, b):
