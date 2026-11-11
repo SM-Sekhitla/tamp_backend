@@ -45,13 +45,33 @@ async def lifespan(app: FastAPI):
                 logging.getLogger("tamp.recurring_loads").exception("Recurring load worker failed")
             await asyncio.sleep(60)
 
+    async def compliance_notification_worker():
+        while True:
+            try:
+                async with AsyncSessionLocal.begin() as db:
+                    await db.run_sync(
+                        lambda sync_db: __import__(
+                            "app.services.notifications",
+                            fromlist=["create_licence_expiry_notifications"],
+                        ).create_licence_expiry_notifications(sync_db)
+                    )
+            except Exception:
+                logging.getLogger("tamp.notifications").exception(
+                    "Compliance notification worker failed"
+                )
+            await asyncio.sleep(3600)
+
     recurring_task = asyncio.create_task(recurring_worker())
+    compliance_notification_task = asyncio.create_task(compliance_notification_worker())
     try:
         yield
     finally:
         recurring_task.cancel()
+        compliance_notification_task.cancel()
         with suppress(asyncio.CancelledError):
             await recurring_task
+        with suppress(asyncio.CancelledError):
+            await compliance_notification_task
         from app.services.maps import close_provider_client
 
         await close_provider_client()
