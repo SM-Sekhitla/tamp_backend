@@ -2,6 +2,8 @@ import secrets
 import smtplib
 from datetime import timedelta
 from email.message import EmailMessage
+from html import escape
+from urllib.parse import urlencode
 
 import httpx
 
@@ -21,33 +23,68 @@ def mailjet_configured():
     )
 
 
-def send_with_mailjet(email, code):
-    payload = {
-        "Messages": [
-            {
-                "From": {
-                    "Email": settings.mailjet_from_email,
-                    "Name": settings.mailjet_from_name,
-                },
-                "To": [{"Email": email}],
-                "Subject": "Your TAMP verification code",
-                "TextPart": (f"Your TAMP verification code is {code}. It expires in 10 minutes."),
-            }
-        ]
-    }
-    try:
-        response = httpx.post(
-            "https://api.mailjet.com/v3.1/send",
-            auth=(settings.mailjet_api_key, settings.mailjet_secret_key),
-            json=payload,
-            timeout=10,
-        )
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise AppError("Email delivery unavailable", 503) from exc
+def _email_html(*, eyebrow, heading, message, code=None, button_label=None, button_url=None):
+    code_block = (
+        f'<div style="margin:24px 0;padding:18px;text-align:center;background:#111318;border:1px solid #34363d;border-radius:12px;'
+        f'font:700 30px/1 monospace;letter-spacing:8px;color:#f5b800">{escape(code)}</div>'
+        if code else ""
+    )
+    button = (
+        f'<a href="{escape(button_url)}" style="display:inline-block;margin:22px 0;padding:14px 24px;background:#f5b800;'
+        f'border-radius:9px;color:#111318;text-decoration:none;font-weight:800">{escape(button_label)}</a>'
+        if button_label and button_url else ""
+    )
+    return f"""<!doctype html><html><body style="margin:0;background:#0b0d11;color:#f7f7f7;font-family:Arial,sans-serif">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:36px 16px">
+    <table role="presentation" width="100%" style="max-width:560px;margin:auto;background:#181a20;border:1px solid #30323a;border-radius:18px;overflow:hidden">
+    <tr><td style="height:6px;background:#f5b800"></td></tr><tr><td style="padding:34px">
+    <div style="font-size:28px;font-weight:900;letter-spacing:-2px">TAMP<span style="color:#f5b800">.</span></div>
+    <div style="margin-top:30px;color:#f5b800;font-size:11px;font-weight:800;letter-spacing:3px;text-transform:uppercase">{escape(eyebrow)}</div>
+    <h1 style="margin:10px 0 12px;font-size:26px;line-height:1.2">{escape(heading)}</h1>
+    <p style="margin:0;color:#b9bbc3;font-size:15px;line-height:1.7">{escape(message)}</p>{code_block}{button}
+    <p style="margin:26px 0 0;color:#777a84;font-size:12px;line-height:1.6">If you did not request this, you can safely ignore this email. Never share a verification code or password.</p>
+    </td></tr></table></td></tr></table></body></html>"""
 
 
-def issue_code(db, key, email):
+def send_email(email, subject, text, html):
+    if mailjet_configured():
+        payload = {
+            "Messages": [{
+                "From": {"Email": settings.mailjet_from_email, "Name": settings.mailjet_from_name},
+                "To": [{"Email": email}], "Subject": subject, "TextPart": text, "HTMLPart": html,
+            }]
+        }
+        try:
+            response = httpx.post("https://api.mailjet.com/v3.1/send", auth=(settings.mailjet_api_key, settings.mailjet_secret_key), json=payload, timeout=10)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise AppError("Email delivery unavailable", 503) from exc
+        return True
+    if settings.smtp_host:
+        message = EmailMessage()
+        message["Subject"], message["From"], message["To"] = subject, settings.smtp_from, email
+        message.set_content(text)
+        message.add_alternative(html, subtype="html")
+        try:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+                if settings.smtp_starttls: smtp.starttls()
+                if settings.smtp_username: smtp.login(settings.smtp_username, settings.smtp_password)
+                smtp.send_message(message)
+        except (OSError, smtplib.SMTPException) as exc:
+            raise AppError("Email delivery unavailable", 503) from exc
+        return True
+    return False
+
+
+def send_account_verified(email, name):
+    send_email(
+        email, "Your TAMP account is verified",
+        "Your TAMP account has been verified. You can now access the approved platform features.",
+        _email_html(eyebrow="Account approved", heading=f"Welcome aboard, {name}", message="Your account and submitted information have been verified. You can now sign in and use the approved TAMP platform features.", button_label="Sign in to TAMP", button_url=settings.frontend_url.rstrip("/") + "/"),
+    )
+
+
+def issue_code(db, key, email, *, purpose="verification", name=None, expiry_minutes=10):
     code = f"{secrets.randbelow(1000000):06d}"
     record = db.get(EmailCode, key)
     if record is None:
@@ -55,27 +92,25 @@ def issue_code(db, key, email):
         db.add(record)
     record.digest, record.expires, record.attempts, record.target = (
         token_hash(key + code),
-        now() + timedelta(minutes=10),
+        now() + timedelta(minutes=expiry_minutes),
         0,
         email,
     )
-    if mailjet_configured():
-        send_with_mailjet(email, code)
-        return {"sent": True, "live": True}
-    if settings.smtp_host:
-        message = EmailMessage()
-        message["Subject"] = "Your TAMP verification code"
-        message["From"], message["To"] = settings.smtp_from, email
-        message.set_content(f"Your TAMP verification code is {code}. It expires in 10 minutes.")
-        try:
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
-                if settings.smtp_starttls:
-                    smtp.starttls()
-                if settings.smtp_username:
-                    smtp.login(settings.smtp_username, settings.smtp_password)
-                smtp.send_message(message)
-        except (OSError, smtplib.SMTPException) as exc:
-            raise AppError("Email delivery unavailable", 503) from exc
+    reset_url = settings.frontend_url.rstrip("/") + "/forgot-password?" + urlencode({"email": email, "code": code})
+    is_reset = purpose in {"reset", "invite"}
+    subject = "Create your TAMP password" if purpose == "invite" else ("Reset your TAMP password" if is_reset else "Your TAMP verification code")
+    heading = "Create your password" if purpose == "invite" else ("Reset your password" if is_reset else "Verify your email")
+    expiry_text = f"{expiry_minutes} minutes" if expiry_minutes < 60 else f"{expiry_minutes // 60} hours"
+    text = f"Your TAMP code is {code}. It expires in {expiry_text}." + (f" Open {reset_url}" if is_reset else "")
+    html = _email_html(
+        eyebrow="Team invitation" if purpose == "invite" else ("Password security" if is_reset else "Email verification"),
+        heading=heading,
+        message=(f"{name or 'Your organisation'} invited you to TAMP. Create a private password to activate your account. This invitation expires in {expiry_text}." if purpose == "invite" else (f"Use the secure button below to choose a new password. This link and code expire in {expiry_text}." if is_reset else f"Enter this one-time code in TAMP to confirm your email address. It expires in {expiry_text}.")),
+        code=code,
+        button_label="Create password" if purpose == "invite" else ("Reset password" if is_reset else None),
+        button_url=reset_url if is_reset else None,
+    )
+    if send_email(email, subject, text, html):
         return {"sent": True, "live": True}
     require(
         settings.environment != "production" and settings.dev_email_codes,

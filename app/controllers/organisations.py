@@ -273,9 +273,19 @@ def handle(action, data, db, request, response, party):
                 created_at=now(),
             )
         )
+    if created:
+        from app.services.email import issue_code
+
+        issue_code(
+            db,
+            "reset:" + email,
+            email,
+            purpose="invite",
+            name=organisation.name,
+            expiry_minutes=24 * 60,
+        )
     return {
         "ok": True,
         "userId": user.id,
         "created": created,
-        **({"temporaryPassword": temporary_password} if temporary_password else {}),
     }

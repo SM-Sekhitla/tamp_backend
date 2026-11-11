@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     mailjet_secret_key: str = ""
     mailjet_from_email: str = ""
     mailjet_from_name: str = "TAMP"
+    frontend_url: str = "http://localhost:3000"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""

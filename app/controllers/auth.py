@@ -111,7 +111,7 @@ def handle(action, data, db, request, response, party):
     if action == "requestPasswordReset":
         email = str(d["email"]).lower()
         user = find_email(db, email)
-        result = issue_code(db, "reset:" + email, email) if user else {}
+        result = issue_code(db, "reset:" + email, email, purpose="reset") if user else {}
         return {"sent": True, **({"devCode": result["devCode"]} if "devCode" in result else {})}
     if action == "resetPassword":
         email = str(d["email"]).lower()
@@ -119,6 +119,7 @@ def handle(action, data, db, request, response, party):
         user = find_email(db, email)
         require(user is not None, "Invalid or expired verification code", 400)
         user.password_hash = passwords.hash(d["newPassword"])
+        user.data = {**user.data, "temporaryPassword": False}
         revoke(db, user)
         return {"ok": True}
     if action == "changePassword":

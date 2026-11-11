@@ -54,6 +54,10 @@ def handle(action, data, db, request, response, party):
         user = db.get(User, d["partyId"])
         require(user is not None, "User not found", 404)
         user.data = {**user.data, "verification": d["status"]}
+        if d["status"] == "VERIFIED":
+            from app.services.email import send_account_verified
+
+            send_account_verified(user.email, user.data.get("contactName", "TAMP member"))
         from app.services.domain import audit
 
         audit(db, party, "VERIFICATION_CHANGED", "USER", user.id, "Verification updated")
