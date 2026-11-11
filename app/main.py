@@ -26,10 +26,11 @@ from app.middleware.security import SecurityHeadersMiddleware
 async def lifespan(app: FastAPI):
     from app.db.session import AsyncSessionLocal
     from app.services.initial_users import ensure_platform_super_user
-    from app.services.rbac import seed_rbac
+    from app.services.rbac import repair_legacy_user_access, seed_rbac
 
     async with AsyncSessionLocal.begin() as db:
         await db.run_sync(seed_rbac)
+        await db.run_sync(repair_legacy_user_access)
 
     await ensure_platform_super_user()
     async def recurring_worker():

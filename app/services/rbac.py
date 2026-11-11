@@ -8,6 +8,7 @@ from app.db.models import (
     Permission,
     Role,
     RolePermission,
+    User,
     UserRole,
 )
 
@@ -209,6 +210,52 @@ def provision_user_access(db, user, organisation_name=None, organisation_type=No
         )
     db.flush()
     return organisation
+
+
+def repair_legacy_user_access(db):
+    """Backfill missing organisation role assignments for existing accounts."""
+    for user in db.scalars(select(User)):
+        legacy_role = user.data.get("role", "DRIVER")
+        if legacy_role in {"ADMIN", "system_super_user"}:
+            organisation_id = None
+        else:
+            membership = db.scalar(
+                select(OrganisationMembership)
+                .where(
+                    OrganisationMembership.user_id == user.id,
+                    OrganisationMembership.status == "ACTIVE",
+                )
+                .order_by(
+                    OrganisationMembership.is_primary.desc(),
+                    OrganisationMembership.created_at,
+                )
+                .limit(1)
+            )
+            if membership is None:
+                continue
+            organisation_id = membership.organisation_id
+        role_id = ROLE_IDS.get(legacy_role, ROLE_IDS["DRIVER"])
+        assignment = db.scalar(
+            select(UserRole).where(
+                UserRole.user_id == user.id,
+                UserRole.role_id == role_id,
+                UserRole.organisation_id.is_(None)
+                if organisation_id is None
+                else UserRole.organisation_id == organisation_id,
+            )
+        )
+        if assignment is None:
+            db.add(
+                UserRole(
+                    id=new_id("UR"),
+                    user_id=user.id,
+                    role_id=role_id,
+                    organisation_id=organisation_id,
+                    assigned_by=None,
+                    created_at=now(),
+                )
+            )
+    db.flush()
 
 
 def primary_organisation_id(db, user):

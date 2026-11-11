@@ -141,7 +141,9 @@ class Truck(Input):
     preferredLanes: list[Lane] = Field(default_factory=list, max_length=50)
     status: Literal["AVAILABLE", "RESERVED", "ON_TRIP", "OFFLINE", "EXPIRED"]
     createdAt: datetime
+    licenceNumber: str | None = Field(default=None, min_length=1, max_length=80)
     licenceExpiry: str | None = None
+    alwaysAvailable: bool = False
     vin: str | None = Field(default=None, min_length=17, max_length=17, pattern=r"^[A-HJ-NPR-Z0-9]{17}$")
     make: str | None = Field(default=None, max_length=80)
     model: str | None = Field(default=None, max_length=80)

@@ -467,7 +467,18 @@ def handle(action, data, db, request, response, party):
             "suggestedAction": None,
         }
         put(db, "trips", trip)
-        put(db, "trucks", {**truck, "status": "AVAILABLE" if status == "COMPLETED" else "ON_TRIP"})
+        put(
+            db,
+            "trucks",
+            {
+                **truck,
+                "status": (
+                    "AVAILABLE" if truck.get("alwaysAvailable") else "OFFLINE"
+                )
+                if status == "COMPLETED"
+                else "ON_TRIP",
+            },
+        )
         if status == "COMPLETED":
             put(db, "loads", {**load, "status": "COMPLETED"})
             from app.services.finance import ensure_invoice_for_trip

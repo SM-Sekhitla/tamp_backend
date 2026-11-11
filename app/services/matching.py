@@ -70,7 +70,11 @@ def score(load, truck, operator, owner):
     start = max(dt(load["pickupWindow"]["from"]), dt(truck["availableFrom"]))
     end = min(dt(load["pickupWindow"]["to"]), dt(truck["availableTo"]))
     licence_expiry = truck.get("licenceExpiry")
-    licence_valid = bool(licence_expiry) and dt(licence_expiry) >= start
+    licence_valid = (
+        bool(truck.get("licenceNumber"))
+        and bool(licence_expiry)
+        and dt(licence_expiry) >= start
+    )
     documents_complete = len(truck.get("documents", [])) >= 3
     tests = [
         ("R-CAPACITY", "Payload capacity", truck["payloadCapacityKg"] >= load["weightKg"]),
@@ -78,7 +82,7 @@ def score(load, truck, operator, owner):
         ("R-WINDOW", "Availability overlaps pickup", end >= start),
         ("R-RADIUS", "Within 150 km", km <= 150),
         ("R-STATUS", "Truck available", truck["status"] == "AVAILABLE"),
-        ("R-LICENCE", "Vehicle licence valid through pickup", licence_valid),
+        ("R-LICENCE", "Vehicle licence number and expiry valid through pickup", licence_valid),
         ("R-DOCUMENTS", "Required vehicle documents uploaded", documents_complete),
         (
             "R-ACTIVE",

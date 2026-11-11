@@ -17,6 +17,7 @@ def _vehicle_document(truck: dict, owner_id: str, existing: dict | None = None) 
         "bodyType": truck["bodyType"],
         "payloadCapacityKg": truck["payloadCapacityKg"],
         **({"volumeCapacityM3": truck["volumeCapacityM3"]} if truck.get("volumeCapacityM3") else {}),
+        **({"licenceNumber": truck["licenceNumber"]} if truck.get("licenceNumber") else {}),
         **({"licenceExpiry": truck["licenceExpiry"]} if truck.get("licenceExpiry") else {}),
         "photos": truck.get("photos", []),
         "documents": truck.get("documents", []),

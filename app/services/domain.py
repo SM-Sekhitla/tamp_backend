@@ -345,6 +345,12 @@ def sync(db, party, delta):
 
                 require_permission(db, party, "trucks.manage")
                 require(
+                    bool(data.get("licenceNumber", "").strip())
+                    and bool(data.get("licenceExpiry")),
+                    "Vehicle licence number and expiry date are required",
+                    400,
+                )
+                require(
                     party.data["role"] in ["TRANSPORTER", "ADMIN"]
                     and (data["transporterId"] in organisation_users or is_admin(party))
                 )

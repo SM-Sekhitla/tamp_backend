@@ -50,7 +50,12 @@ def create_party(db, email, password, role, name, company, **extra):
 
 def set_session(db, party, response):
     token = secrets.token_urlsafe(48)
-    from app.services.rbac import primary_organisation_id
+    from app.services.rbac import primary_organisation_id, provision_user_access
+
+    # Repair legacy accounts that pre-date organisation-scoped RBAC. Truck
+    # owner administrators must retain their role assignment in their primary
+    # organisation when a new session is created.
+    provision_user_access(db, party, party.data.get("companyName"))
 
     active_organisation_id = primary_organisation_id(db, party)
     db.info["active_organisation_id"] = active_organisation_id
