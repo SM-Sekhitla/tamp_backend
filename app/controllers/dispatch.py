@@ -86,6 +86,12 @@ def handle(action, data, db, request, response, party):
         require(current is not None, "Active dispatch not found", 404)
         if operation in ["ACCEPT", "DECLINE"]:
             require(party.id == current["driverId"], "Only the assigned driver may respond", 403)
+            if operation == "DECLINE":
+                require(
+                    bool(values.get("note", "").strip()),
+                    "Add a reason before declining this trip",
+                    400,
+                )
             status = "ACCEPTED" if operation == "ACCEPT" else "DECLINED"
             dispatch = {**current, "status": status, "respondedAt": iso(), "timeline": [*current.get("timeline", []), {"status": status, "at": iso(), "byUserId": party.id, "note": values.get("note")} ]}
             put(db, "dispatches", dispatch)
@@ -95,7 +101,13 @@ def handle(action, data, db, request, response, party):
                 from app.services.fleet import sync_vehicle_for_truck
                 sync_vehicle_for_truck(db, party, updated_truck, truck)
                 put(db, "trucks", updated_truck)
-            notify(db, truck["transporterId"], trip["id"], f"Driver {status.lower()} assignment", load["id"])
+            notify(
+                db,
+                truck["transporterId"],
+                trip["id"],
+                f"Driver {status.lower()} assignment",
+                values.get("note") if status == "DECLINED" else load["id"],
+            )
         else:
             require_permission(db, party, "dispatch.manage")
             organisation_id = truck_row.organisation_id or db.info.get("active_organisation_id")
@@ -131,7 +143,8 @@ def handle(action, data, db, request, response, party):
         system_message(
             db,
             conversation,
-            f"Dispatch {operation.lower().replace('_', ' ')}: {dispatch['status'].lower()}.",
+            f"Dispatch {operation.lower().replace('_', ' ')}: {dispatch['status'].lower()}."
+            + (f" Reason: {values['note']}" if operation == "DECLINE" else ""),
             "DISPATCH",
         )
     return {"ok": True, "dispatch": dispatch}
