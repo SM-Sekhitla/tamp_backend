@@ -135,3 +135,65 @@ def create_licence_expiry_notifications(db, *, today: date | None = None) -> int
                 notification.data = {**notification.data, "eventKey": event_key}
     db.flush()
     return created
+
+
+def create_driver_document_expiry_notifications(db, *, today: date | None = None) -> int:
+    """Notify only the driver's carrier organisation about expiring compliance files."""
+    today = today or datetime.now(timezone.utc).date()
+    model = MODELS["notifications"]
+    created = 0
+    labels = {
+        "DRIVING_LICENCE": "Driving licence",
+        "PRDP": "Professional Driving Permit",
+        "MEDICAL_CERTIFICATE": "Medical certificate",
+        "IDENTITY_DOCUMENT": "Identity document",
+        "EMPLOYMENT_CONTRACT": "Employment contract",
+    }
+    for row in db.scalars(select(MODELS["driverDocuments"])):
+        expiry_value = row.data.get("expiresAt")
+        if not row.organisation_id or not expiry_value or row.data.get("status") == "REMOVED":
+            continue
+        try:
+            expiry = datetime.fromisoformat(expiry_value.replace("Z", "+00:00")).date()
+        except (TypeError, ValueError):
+            continue
+        days = (expiry - today).days
+        if days > 30:
+            continue
+        expired = days < 0
+        label = labels.get(row.data.get("documentType"), "Driver document")
+        title = f"{label} {'expired' if expired else 'expiring'}"
+        driver_name = row.data.get("driverName", "A driver")
+        detail = (
+            f"{driver_name}'s {label.lower()} expired on {expiry.isoformat()}."
+            if expired
+            else f"{driver_name}'s {label.lower()} expires on {expiry.isoformat()} ({days} day{'s' if days != 1 else ''} remaining)."
+        )
+        event_key = f"driver-document:{row.id}:{expiry.isoformat()}:{'expired' if expired else '30-days'}"
+        exists = db.scalar(
+            select(model.id).where(
+                model.organisation_id == row.organisation_id,
+                model.data["eventKey"].as_string() == event_key,
+            ).limit(1)
+        )
+        if exists:
+            continue
+        before = set(db.scalars(select(model.id)))
+        created += notify_organisation(
+            db,
+            row.organisation_id,
+            title=title,
+            detail=detail,
+            subject_type="DRIVER_DOCUMENT",
+            subject_id=row.id,
+            tone="warning" if expired or days <= 7 else "info",
+            role_ids={"ROLE-TRANSPORTER", "ROLE-DISPATCHER"},
+        )
+        for notification in db.scalars(select(model).where(model.id.not_in(before))):
+            notification.data = {**notification.data, "eventKey": event_key}
+    db.flush()
+    return created
+
+
+def create_compliance_expiry_notifications(db, *, today: date | None = None) -> int:
+    return create_licence_expiry_notifications(db, today=today) + create_driver_document_expiry_notifications(db, today=today)

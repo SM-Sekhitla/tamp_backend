@@ -53,8 +53,8 @@ async def lifespan(app: FastAPI):
                     await db.run_sync(
                         lambda sync_db: __import__(
                             "app.services.notifications",
-                            fromlist=["create_licence_expiry_notifications"],
-                        ).create_licence_expiry_notifications(sync_db)
+                            fromlist=["create_compliance_expiry_notifications"],
+                        ).create_compliance_expiry_notifications(sync_db)
                     )
             except Exception:
                 logging.getLogger("tamp.notifications").exception(
@@ -98,7 +98,7 @@ def create_app():
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-TAMP-Request"],
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)

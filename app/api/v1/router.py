@@ -34,6 +34,80 @@ router = APIRouter()
 logger = logging.getLogger("tamp.api")
 
 
+@router.get("/api/v1/organisations/{organisation_id}/drivers/{driver_id}/documents", tags=["drivers"])
+async def driver_documents(
+    organisation_id: str,
+    driver_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.driver_compliance import list_documents
+
+    party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    return await db.run_sync(
+        lambda sync_db: list_documents(sync_db, party, organisation_id, driver_id)
+    )
+
+
+@router.post("/api/v1/organisations/{organisation_id}/drivers/{driver_id}/documents", tags=["drivers"])
+async def upload_driver_document(
+    organisation_id: str,
+    driver_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    document_type: str = Form(...),
+    document_number: str = Form(""),
+    issued_at: str = Form(""),
+    expires_at: str = Form(""),
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.driver_compliance import create_document
+
+    content = await file.read(settings.max_upload_bytes + 1)
+
+    def create(sync_db):
+        party = current_party(sync_db, request)
+        from app.services.rbac import enforce_verification_access
+
+        enforce_verification_access(party, "driverDocuments.create", True)
+        upload = store(sync_db, party, content, file.filename, "DRIVER_DOCUMENT")
+        return create_document(
+            sync_db,
+            party,
+            organisation_id,
+            driver_id,
+            document_type=document_type,
+            document_number=document_number,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            upload=upload,
+        )
+
+    result = await db.run_sync(create)
+    await db.commit()
+    return result
+
+
+@router.delete("/api/v1/organisations/{organisation_id}/drivers/{driver_id}/documents/{document_id}", tags=["drivers"])
+async def delete_driver_document(
+    organisation_id: str,
+    driver_id: str,
+    document_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    from app.services.driver_compliance import delete_document
+
+    party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
+    result = await db.run_sync(
+        lambda sync_db: delete_document(
+            sync_db, party, organisation_id, driver_id, document_id
+        )
+    )
+    await db.commit()
+    return result
+
+
 @router.get("/healthz")
 async def health():
     return {"status": "ok"}
@@ -458,7 +532,29 @@ async def download(
         party = current_party(sync_db, request)
         record = needed(sync_db, "uploads", ident)
         allowed = record.owner_id == party.id or is_admin(party)
-        if not allowed and record.data["kind"] != "KYC":
+        if not allowed and record.data["kind"] == "DRIVER_DOCUMENT":
+            from app.db.models import MODELS, OrganisationMembership
+            from app.services.rbac import permission_codes
+            from sqlalchemy import select
+
+            document = sync_db.scalar(
+                select(MODELS["driverDocuments"]).where(
+                    MODELS["driverDocuments"].data["fileUrl"].as_string() == record.data["url"]
+                )
+            )
+            allowed = bool(
+                document
+                and "organisations.members.manage"
+                in permission_codes(sync_db, party, document.organisation_id)
+                and sync_db.scalar(
+                    select(OrganisationMembership.id).where(
+                        OrganisationMembership.organisation_id == document.organisation_id,
+                        OrganisationMembership.user_id == party.id,
+                        OrganisationMembership.status == "ACTIVE",
+                    )
+                )
+            )
+        if not allowed and record.data["kind"] not in {"KYC", "DRIVER_DOCUMENT"}:
             from app.services.domain import snapshot
 
             visible = snapshot(sync_db, party)

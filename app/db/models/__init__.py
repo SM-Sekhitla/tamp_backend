@@ -151,6 +151,7 @@ for name in [
     "loads",
     "vehicles",
     "vehicleDriverAssignments",
+    "driverDocuments",
     "trucks",
     "matches",
     "route_quotes",
@@ -186,6 +187,7 @@ for name in [
     }
     refs = {
         "vehicleDriverAssignments": {"vehicle_id": "vehicles", "driver_id": "users"},
+        "driverDocuments": {"driver_id": "users"},
         "trucks": {"vehicle_id": "vehicles"},
         "matches": {"load_id": "loads", "truck_id": "trucks"},
         "route_quotes": {"load_id": "loads", "truck_id": "trucks", "match_id": "matches"},
