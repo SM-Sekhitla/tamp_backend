@@ -90,7 +90,10 @@ def send_account_verified(email, name):
 
 
 def issue_code(db, key, email, *, purpose="verification", name=None, expiry_minutes=10):
-    code = f"{secrets.randbelow(1000000):06d}"
+    is_reset = purpose in {"reset", "invite"}
+    # Password actions use a high-entropy bearer token. Six-digit codes remain
+    # limited to email-address verification where users enter them manually.
+    code = secrets.token_urlsafe(48) if is_reset else f"{secrets.randbelow(1000000):06d}"
     record = db.get(EmailCode, key)
     if record is None:
         record = EmailCode(key=key)
@@ -102,20 +105,20 @@ def issue_code(db, key, email, *, purpose="verification", name=None, expiry_minu
         email,
     )
     reset_url = settings.frontend_url.rstrip("/") + "/forgot-password?" + urlencode({"email": email, "code": code})
-    is_reset = purpose in {"reset", "invite"}
-    subject = "Create your TAMP password" if purpose == "invite" else ("Reset your TAMP password" if is_reset else "Your TAMP verification code")
-    heading = "Create your password" if purpose == "invite" else ("Reset your password" if is_reset else "Verify your email")
+    is_mfa = purpose == "mfa"
+    subject = "Your TAMP administrator sign-in code" if is_mfa else ("Create your TAMP password" if purpose == "invite" else ("Reset your TAMP password" if is_reset else "Your TAMP verification code"))
+    heading = "Confirm administrator sign-in" if is_mfa else ("Create your password" if purpose == "invite" else ("Reset your password" if is_reset else "Verify your email"))
     expiry_text = f"{expiry_minutes} minutes" if expiry_minutes < 60 else f"{expiry_minutes // 60} hours"
     text = (
         f"{name or 'Your organisation'} invited you to TAMP. Create your private password within {expiry_text}: {reset_url}"
         if purpose == "invite"
-        else f"Your TAMP code is {code}. It expires in {expiry_text}." + (f" Open {reset_url}" if is_reset else "")
+        else (f"Open this secure, single-use link within {expiry_text}: {reset_url}" if is_reset else f"Your TAMP code is {code}. It expires in {expiry_text}.")
     )
     html = _email_html(
-        eyebrow="Team invitation" if purpose == "invite" else ("Password security" if is_reset else "Email verification"),
+        eyebrow="Administrator security" if is_mfa else ("Team invitation" if purpose == "invite" else ("Password security" if is_reset else "Email verification")),
         heading=heading,
-        message=(f"{name or 'Your organisation'} invited you to TAMP. Create a private password to activate your account. This invitation expires in {expiry_text}." if purpose == "invite" else (f"Use the secure button below to choose a new password. This link and code expire in {expiry_text}." if is_reset else f"Enter this one-time code in TAMP to confirm your email address. It expires in {expiry_text}.")),
-        code=None if purpose == "invite" else code,
+        message=(f"Enter this one-time code to finish signing in to the TAMP administration console. It expires in {expiry_text}." if is_mfa else (f"{name or 'Your organisation'} invited you to TAMP. Create a private password to activate your account. This invitation expires in {expiry_text}." if purpose == "invite" else (f"Use the secure button below to choose a new password. This link expires in {expiry_text}." if is_reset else f"Enter this one-time code in TAMP to confirm your email address. It expires in {expiry_text}."))),
+        code=None if is_reset else code,
         button_label="Create my password" if purpose == "invite" else ("Reset my password" if is_reset else None),
         button_url=reset_url if is_reset else None,
         note=("For your security, no temporary password is included. Only you can create the password for this account." if purpose == "invite" else None),

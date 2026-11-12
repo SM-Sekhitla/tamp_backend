@@ -38,7 +38,10 @@ group(
     [
         ("me", a.Empty, False, True),
         ("login", a.Login, True, True),
+        ("verifyMfa", a.MfaVerify, True, True),
         ("logout", a.Empty, True, False),
+        ("sessions", a.Empty, False, False),
+        ("revokeSession", a.SessionId, True, False),
         ("changePassword", a.PasswordChange, True, False),
         ("logoutOtherSessions", a.Empty, True, False),
         ("requestPasswordReset", a.Email, True, True),

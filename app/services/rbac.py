@@ -9,6 +9,7 @@ from app.db.models import (
     Role,
     RolePermission,
     User,
+    UserPermissionOverride,
     UserRole,
 )
 
@@ -292,7 +293,15 @@ def permission_codes(db, user, organisation_id=None):
             )
         )
     )
-    overrides = user.data.get("permissionOverrides", {})
+    override_query = select(UserPermissionOverride).where(
+        UserPermissionOverride.user_id == user.id,
+        UserPermissionOverride.organisation_id.is_(None)
+        if organisation_id is None
+        else UserPermissionOverride.organisation_id == organisation_id,
+    )
+    overrides = {
+        item.permission_code: item.enabled for item in db.scalars(override_query)
+    }
     for code, allowed in overrides.items():
         if code not in PERMISSIONS:
             continue
@@ -417,6 +426,7 @@ UNVERIFIED_ALLOWED_MUTATIONS = {
     "auth.logout",
     "auth.changePassword",
     "auth.logoutOtherSessions",
+    "auth.revokeSession",
     "auth.requestEmailChange",
     "auth.confirmEmailChange",
     "auth.updateProfile",
@@ -434,6 +444,23 @@ UNVERIFIED_ALLOWED_MUTATIONS = {
 
 
 def enforce_verification_access(user, procedure_name, mutation):
+    if (
+        mutation
+        and user is not None
+        and user.data.get("temporaryPassword")
+        and procedure_name
+        not in {
+            "auth.changePassword",
+            "auth.logout",
+            "auth.logoutOtherSessions",
+            "auth.revokeSession",
+        }
+    ):
+        require(
+            False,
+            "Change your temporary password before performing this action",
+            403,
+        )
     if (
         not mutation
         or user is None

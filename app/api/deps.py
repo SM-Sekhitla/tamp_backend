@@ -1,4 +1,7 @@
 from app.core.errors import require
+from datetime import timedelta
+
+from app.core.config import settings
 from app.core.security import now, token_hash
 from app.db.models import Session, User
 
@@ -8,9 +11,18 @@ COOKIE = "tamp_session"
 def current_party(db, request, required=True):
     raw = request.cookies.get(COOKIE, "")
     session = db.get(Session, token_hash(raw)) if raw else None
-    party = db.get(User, session.user_id) if session and session.expires > now() else None
+    current = now()
+    idle_limit = current - timedelta(minutes=settings.session_idle_minutes)
+    party = (
+        db.get(User, session.user_id)
+        if session and session.expires > current and session.last_seen_at > idle_limit
+        else None
+    )
     if party:
         db.info["active_organisation_id"] = session.active_organisation_id
+        # Avoid a write on every request while still keeping an accurate idle timeout.
+        if session.last_seen_at < current - timedelta(minutes=5):
+            session.last_seen_at = current
     if party and party.data.get("suspended"):
         party = None
     if required:

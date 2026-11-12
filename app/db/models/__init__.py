@@ -113,6 +113,28 @@ class UserRole(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class UserPermissionOverride(Base):
+    __tablename__ = "user_permission_overrides"
+    __table_args__ = (
+        UniqueConstraint("user_id", "organisation_id", "permission_code"),
+    )
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    organisation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    permission_code: Mapped[str] = mapped_column(
+        ForeignKey("permissions.code", ondelete="CASCADE"), index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    updated_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Session(Base):
     __tablename__ = "sessions"
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -121,6 +143,10 @@ class Session(Base):
         ForeignKey("organisations.id", ondelete="SET NULL"), nullable=True, index=True
     )
     expires: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
 
 class EmailCode(Base):

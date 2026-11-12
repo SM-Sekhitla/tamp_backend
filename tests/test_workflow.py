@@ -33,6 +33,9 @@ def fixtures(accounts):
         transporterId=accounts["carrier"]["id"],
         driverId=accounts["driver"]["id"],
         registration="ABC123GP",
+        licenceNumber="LIC-ABC123GP",
+        licenceExpiry=(now() + timedelta(days=365)).date().isoformat(),
+        documents=["/api/uploads/licence", "/api/uploads/roadworthy", "/api/uploads/insurance"],
         bodyType="TAUTLINER",
         payloadCapacityKg=12000,
         currentLocation=PLACE,
@@ -402,7 +405,7 @@ def test_concurrent_acceptance_has_one_winner(client, accounts):
 
     def accept(pair):
         truck_id, proof = pair
-        with TestClient(app, headers={"X-TAMP-Request": "1"}) as c:
+        with TestClient(app, headers={"X-TAMP-Request": "1", "Host": "localhost"}) as c:
             c.cookies.set("tamp_session", cookie)
             return rpc(
                 c,

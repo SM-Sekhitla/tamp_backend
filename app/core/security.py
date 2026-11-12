@@ -32,3 +32,21 @@ def verify_password(password, hashed):
         return passwords.verify(password, hashed or DUMMY_HASH)
     except (ValueError, TypeError):
         return False
+
+
+def validate_new_password(password):
+    value = str(password or "")
+    common = {
+        "password123!",
+        "password1234",
+        "qwerty123456",
+        "admin12345678",
+        "letmein123456",
+    }
+    return (
+        len(value) >= 12
+        and value.casefold() not in common
+        and any(character.islower() for character in value)
+        and any(character.isupper() for character in value)
+        and any(character.isdigit() for character in value)
+    )

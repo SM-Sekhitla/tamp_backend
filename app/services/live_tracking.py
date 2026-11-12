@@ -140,11 +140,20 @@ async def update_geofences(db: AsyncSession, trip_row, truck: dict, load: dict, 
 
 
 async def websocket_party(db: AsyncSession, websocket: WebSocket):
+    from app.core.config import settings
+
     raw = websocket.cookies.get("tamp_session", "")
     session = await db.get(Session, token_hash(raw)) if raw else None
-    party = await db.get(Party, session.user_id) if session and session.expires > now() else None
+    current = now()
+    idle_limit = current - timedelta(minutes=settings.session_idle_minutes)
+    party = (
+        await db.get(Party, session.user_id)
+        if session and session.expires > current and session.last_seen_at > idle_limit
+        else None
+    )
     if not party or party.data.get("suspended"):
         raise AppError("Sign in to continue", 401)
+    session.last_seen_at = current
     return party
 
 

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     secret_key: str = "development-only-change-before-deployment"
     cookie_secure: bool = False
     session_hours: int = 24
+    session_idle_minutes: int = 60
 
     # Initial platform account. Bootstrap runs only when BOOTSTRAP_SECRET is set.
     bootstrap_secret: str | None = None
@@ -58,6 +59,12 @@ class Settings(BaseSettings):
     invoice_due_days: int = 7
     rate_limit: int = 240
     auth_rate_limit: int = 15
+    auth_account_attempts: int = 5
+    auth_account_window_minutes: int = 15
+    admin_mfa_required: bool = False
+    clamav_host: str = ""
+    clamav_port: int = 3310
+    require_malware_scan: bool = False
     webhook_allowed_hosts: list[str] = []
     log_path: str = "logs"
     log_max_bytes: int = 5 * 1024 * 1024
@@ -90,6 +97,21 @@ class Settings(BaseSettings):
                 raise ValueError("Production requires explicit host and origin allowlists")
             if self.geocoding_provider == "tomtom" and not self.tomtom_api_key:
                 raise ValueError("Production TomTom geocoding requires TOMTOM_API_KEY")
+            if self.session_hours > 24 or not 5 <= self.session_idle_minutes <= 120:
+                raise ValueError("Production sessions require a 5-120 minute idle timeout and at most 24 hours")
+            if not self.admin_mfa_required:
+                raise ValueError("Production requires ADMIN_MFA_REQUIRED=true")
+            if not self.require_malware_scan or not self.clamav_host:
+                raise ValueError(
+                    "Production requires REQUIRE_MALWARE_SCAN=true and CLAMAV_HOST"
+                )
+            if (
+                self.default_platform_admin_password
+                and len(self.default_platform_admin_password) < 16
+            ):
+                raise ValueError(
+                    "Production DEFAULT_PLATFORM_ADMIN_PASSWORD must be at least 16 characters"
+                )
         return self
 
 

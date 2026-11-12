@@ -38,6 +38,7 @@ logger = logging.getLogger("tamp.api")
 
 class PermissionToggle(BaseModel):
     enabled: bool
+    organisationId: str | None = Field(default=None, max_length=80)
 
 
 class MatchingConfigInput(BaseModel):
@@ -58,15 +59,27 @@ def _system_super_user(db, request):
 @router.get("/api/v1/admin/rbac", tags=["admin"])
 async def rbac_configuration(request: Request, db: AsyncSession = Depends(get_session)):
     def read(sync_db):
-        from app.db.models import Permission, Role, RolePermission, User
+        from app.db.models import Permission, Role, RolePermission, UserPermissionOverride
         _system_super_user(sync_db, request)
         permissions = list(sync_db.scalars(select(Permission).order_by(Permission.code)))
         roles = list(sync_db.scalars(select(Role).order_by(Role.scope, Role.name)))
         assignments = list(sync_db.scalars(select(RolePermission)))
+        active_organisation_id = sync_db.info.get("active_organisation_id")
+        override_condition = (
+            UserPermissionOverride.organisation_id == active_organisation_id
+            if active_organisation_id is not None
+            else UserPermissionOverride.organisation_id.is_(None)
+        )
+        overrides = list(
+            sync_db.scalars(select(UserPermissionOverride).where(override_condition))
+        )
+        overrides_by_user = {}
+        for item in overrides:
+            overrides_by_user.setdefault(item.user_id, {})[item.permission_code] = item.enabled
         return {
             "permissions": [{"code": item.code, "description": item.description} for item in permissions],
             "roles": [{"id": role.id, "name": role.name, "scope": role.scope, "system": role.system, "permissions": [item.permission_code for item in assignments if item.role_id == role.id]} for role in roles],
-            "userOverrides": {user.id: user.data.get("permissionOverrides", {}) for user in sync_db.scalars(select(User)) if user.data.get("permissionOverrides")},
+            "userOverrides": overrides_by_user,
         }
     return await db.run_sync(read)
 
@@ -75,6 +88,7 @@ async def rbac_configuration(request: Request, db: AsyncSession = Depends(get_se
 async def set_role_permission(role_id: str, permission_code: str, payload: PermissionToggle, request: Request, db: AsyncSession = Depends(get_session)):
     def update(sync_db):
         from app.db.models import Permission, Role, RolePermission
+        from app.services.domain import audit
         party = _system_super_user(sync_db, request)
         role = sync_db.get(Role, role_id)
         require(role is not None, "Role not found", 404)
@@ -86,6 +100,7 @@ async def set_role_permission(role_id: str, permission_code: str, payload: Permi
             sync_db.add(RolePermission(role_id=role_id, permission_code=permission_code))
         if not payload.enabled and current is not None:
             sync_db.delete(current)
+        audit(sync_db, party, "ROLE_PERMISSION_CHANGED", "ROLE", role_id, f"{permission_code}={'allowed' if payload.enabled else 'denied'}")
         return {"ok": True, "roleId": role_id, "permission": permission_code, "enabled": payload.enabled, "updatedBy": party.id}
     result = await db.run_sync(update)
     await db.commit()
@@ -95,17 +110,51 @@ async def set_role_permission(role_id: str, permission_code: str, payload: Permi
 @router.put("/api/v1/admin/rbac/users/{user_id}/permissions/{permission_code:path}", tags=["admin"])
 async def set_user_permission(user_id: str, permission_code: str, payload: PermissionToggle, request: Request, db: AsyncSession = Depends(get_session)):
     def update(sync_db):
-        from app.db.models import Permission, User
+        from app.db.models import OrganisationMembership, Permission, User, UserPermissionOverride
+        from app.core.security import new_id, now
+        from app.services.domain import audit
         party = _system_super_user(sync_db, request)
         user = sync_db.get(User, user_id)
         require(user is not None, "User not found", 404)
         require(user.data.get("role") != "system_super_user", "System super user permissions are immutable", 409)
         require(sync_db.get(Permission, permission_code) is not None, "Permission not found", 404)
         require(permission_code != "platform.admin" or user.data.get("role") == "ADMIN", "Platform administration cannot be granted to this user", 409)
-        overrides = dict(user.data.get("permissionOverrides", {}))
-        overrides[permission_code] = payload.enabled
-        user.data = {**user.data, "permissionOverrides": overrides}
-        return {"ok": True, "userId": user_id, "permission": permission_code, "enabled": payload.enabled, "updatedBy": party.id}
+        organisation_id = payload.organisationId or sync_db.info.get("active_organisation_id")
+        if user.data.get("role") not in {"ADMIN", "system_super_user"}:
+            if organisation_id is None:
+                membership = sync_db.scalar(select(OrganisationMembership).where(
+                    OrganisationMembership.user_id == user_id,
+                    OrganisationMembership.status == "ACTIVE",
+                ).order_by(OrganisationMembership.is_primary.desc()).limit(1))
+                organisation_id = membership.organisation_id if membership else None
+            require(
+                organisation_id is not None and sync_db.scalar(select(OrganisationMembership.id).where(
+                    OrganisationMembership.user_id == user_id,
+                    OrganisationMembership.organisation_id == organisation_id,
+                    OrganisationMembership.status == "ACTIVE",
+                )) is not None,
+                "User is not an active member of this organisation",
+                409,
+            )
+        query = select(UserPermissionOverride).where(
+            UserPermissionOverride.user_id == user_id,
+            UserPermissionOverride.permission_code == permission_code,
+            UserPermissionOverride.organisation_id.is_(None)
+            if organisation_id is None
+            else UserPermissionOverride.organisation_id == organisation_id,
+        )
+        override = sync_db.scalar(query)
+        if override is None:
+            override = UserPermissionOverride(
+                id=new_id("UPO"), user_id=user_id, organisation_id=organisation_id,
+                permission_code=permission_code, enabled=payload.enabled,
+                updated_by=party.id, updated_at=now(),
+            )
+            sync_db.add(override)
+        else:
+            override.enabled, override.updated_by, override.updated_at = payload.enabled, party.id, now()
+        audit(sync_db, party, "USER_PERMISSION_CHANGED", "USER", user_id, f"{permission_code}={'allowed' if payload.enabled else 'denied'} organisation={organisation_id or 'platform'}")
+        return {"ok": True, "userId": user_id, "organisationId": organisation_id, "permission": permission_code, "enabled": payload.enabled, "updatedBy": party.id}
     result = await db.run_sync(update)
     await db.commit()
     return result
@@ -127,8 +176,9 @@ async def set_matching_config(payload: MatchingConfigInput, request: Request, db
         from app.db.models import PlatformSetting
         party = _system_super_user(sync_db, request)
         value = payload.model_dump()
-        require(abs(sum(value["weights"].values()) - 100) < 0.01, "Matching weights must total 100", 400)
         require(set(value["weights"]) == {"proximity", "capacity", "timing", "lane", "rating"}, "Matching weight fields are invalid", 400)
+        require(all(0 <= weight <= 100 for weight in value["weights"].values()), "Matching weights must be between 0 and 100", 400)
+        require(abs(sum(value["weights"].values()) - 100) < 0.01, "Matching weights must total 100", 400)
         record = sync_db.get(PlatformSetting, "matching")
         if record is None:
             record = PlatformSetting(key="matching", value=value, updated_at=now(), updated_by=party.id)
@@ -140,6 +190,8 @@ async def set_matching_config(payload: MatchingConfigInput, request: Request, db
         sync_db.flush()
         from app.services.domain import refresh_suggestions
         refresh_suggestions(sync_db)
+        from app.services.domain import audit
+        audit(sync_db, party, "MATCHING_CONFIGURATION_CHANGED", "PLATFORM_SETTING", "matching", "Matching rules and eligibility gates updated")
         return value
     result = await db.run_sync(update)
     await db.commit()

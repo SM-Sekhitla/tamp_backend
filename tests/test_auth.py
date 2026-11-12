@@ -110,6 +110,38 @@ def test_password_reset_invalidates_all_sessions(client, accounts):
     assert client.cookies["tamp_session"] != cookie
 
 
+def test_admin_mfa_and_session_inventory(client, accounts):
+    from app.core.config import settings
+
+    previous = settings.admin_mfa_required
+    settings.admin_mfa_required = True
+    try:
+        challenge = result(
+            rpc(
+                client,
+                "auth.login",
+                {"email": "admin@example.com", "password": "Testing-password-123"},
+                True,
+            )
+        )
+        assert challenge["mfaRequired"] is True
+        assert result(rpc(client, "auth.me")) is None
+        party = result(
+            rpc(
+                client,
+                "auth.verifyMfa",
+                {"email": "admin@example.com", "code": challenge["devCode"]},
+                True,
+            )
+        )
+        assert party["role"] == "ADMIN"
+        sessions = result(rpc(client, "auth.sessions"))
+        assert len(sessions) == 1 and sessions[0]["current"] is True
+        assert sessions[0]["createdAt"] and sessions[0]["lastSeenAt"]
+    finally:
+        settings.admin_mfa_required = previous
+
+
 def test_otp_attempts_persist(client):
     code = result(rpc(client, "email.sendCode", {"email": "new@example.com"}, True))["devCode"]
     data = dict(

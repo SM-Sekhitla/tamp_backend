@@ -1,5 +1,7 @@
 from io import BytesIO
 from pathlib import Path
+import socket
+import struct
 
 from PIL import Image, UnidentifiedImageError
 
@@ -7,6 +9,35 @@ from app.core.config import settings
 from app.core.errors import require
 from app.core.security import new_id
 from app.services.records import get, put, rows
+
+
+def _scan_for_malware(content):
+    if not settings.clamav_host:
+        require(
+            not settings.require_malware_scan,
+            "File security scanning is temporarily unavailable",
+            503,
+        )
+        return
+    try:
+        with socket.create_connection(
+            (settings.clamav_host, settings.clamav_port), timeout=8
+        ) as scanner:
+            scanner.sendall(b"zINSTREAM\0")
+            for offset in range(0, len(content), 64 * 1024):
+                chunk = content[offset : offset + 64 * 1024]
+                scanner.sendall(struct.pack("!I", len(chunk)) + chunk)
+            scanner.sendall(struct.pack("!I", 0))
+            scanner.settimeout(15)
+            verdict = scanner.recv(4096).decode("utf-8", "replace")
+    except OSError as exc:
+        from app.core.errors import AppError
+
+        if settings.require_malware_scan:
+            raise AppError("File security scanning is temporarily unavailable", 503) from exc
+        return
+    require("FOUND" not in verdict, "This file failed the security scan", 400)
+    require(verdict.rstrip("\0\r\n").endswith("OK"), "File security scanning is temporarily unavailable", 503)
 
 
 def own_upload(db, party, url, kind):
@@ -27,6 +58,7 @@ def store(db, party, content, filename, kind):
         "Invalid file kind",
         400,
     )
+    _scan_for_malware(content)
     require(
         0 < len(content) <= settings.max_upload_bytes,
         f"This file is too large. The maximum size for one file is {settings.max_upload_bytes // (1024 * 1024)} MB.",
@@ -42,6 +74,25 @@ def store(db, party, content, filename, kind):
         require(
             kind in ["KYC", "TRUCK_DOCUMENT", "DRIVER_DOCUMENT", "MESSAGE"],
             "PDFs are not accepted for this upload",
+            400,
+        )
+        # Reject active PDF features. This is deliberately conservative for
+        # operational documents and complements (but does not replace) malware
+        # scanning at the deployment boundary.
+        lowered = content.lower()
+        require(
+            not any(
+                marker in lowered
+                for marker in (
+                    b"/javascript",
+                    b"/js",
+                    b"/launch",
+                    b"/embeddedfile",
+                    b"/openaction",
+                    b"/aa",
+                )
+            ),
+            "This PDF contains active or embedded content and cannot be uploaded",
             400,
         )
         mime = "application/pdf"

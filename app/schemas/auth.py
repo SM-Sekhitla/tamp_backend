@@ -56,7 +56,7 @@ class Driver(Input):
 
 class Register(Login):
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=12, max_length=128)
     code: str = Field(pattern=r"^\d{6}$")
     userType: Literal["CARGO_OWNER", "CARRIER", "BROKER", "DRIVER"]
     firstName: str = Field(min_length=1, max_length=100)
@@ -70,12 +70,12 @@ class Register(Login):
 
 class PasswordChange(Input):
     currentPassword: str = Field(max_length=128)
-    newPassword: str = Field(min_length=8, max_length=128)
+    newPassword: str = Field(min_length=12, max_length=128)
 
 
 class PasswordReset(Email):
-    code: str = Field(pattern=r"^\d{6}$")
-    newPassword: str = Field(min_length=8, max_length=128)
+    code: str = Field(min_length=32, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")
+    newPassword: str = Field(min_length=12, max_length=128)
 
 
 class EmailChange(Input):
@@ -84,6 +84,14 @@ class EmailChange(Input):
 
 class Code(Input):
     code: str = Field(pattern=r"^\d{6}$")
+
+
+class MfaVerify(Email):
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class SessionId(Input):
+    sessionId: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 class Profile(Input):

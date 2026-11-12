@@ -14,6 +14,11 @@ if url.startswith("postgresql+psycopg://"):
 os.environ.update(
     DATABASE_URL=url,
     DEV_EMAIL_CODES="true",
+    MAILJET_API_KEY="",
+    MAILJET_SECRET_KEY="",
+    MAILJET_FROM_EMAIL="",
+    SMTP_HOST="",
+    BOOTSTRAP_SECRET="",
     AUTH_RATE_LIMIT="1000",
     RATE_LIMIT="10000",
     GEOCODING_PROVIDER="local",
@@ -112,6 +117,28 @@ def accounts():
                 OrganisationMembership.is_primary.is_(True),
             )
         )
+        from app.db.models import MODELS
+
+        for ident, filename in [
+            ("licence", "licence.pdf"),
+            ("roadworthy", "roadworthy.pdf"),
+            ("insurance", "insurance.pdf"),
+        ]:
+            db.add(
+                MODELS["uploads"](
+                    id=ident,
+                    owner_id=users["carrier"]["id"],
+                    organisation_id=carrier_membership.organisation_id,
+                    data={
+                        "id": ident,
+                        "url": f"/api/uploads/{ident}",
+                        "kind": "TRUCK_DOCUMENT",
+                        "filename": filename,
+                        "contentType": "application/pdf",
+                        "size": 128,
+                    },
+                )
+            )
         db.add(
             OrganisationMembership(
                 id=new_id("OM"),

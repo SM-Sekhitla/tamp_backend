@@ -33,6 +33,22 @@ def test_upload_validation_and_private_download(client, accounts):
     assert rpc(client, "auth.updateProfile", {"avatarUrl": file["url"]}, True).status_code == 403
 
 
+def test_active_pdf_content_is_rejected(client, accounts):
+    login(client, "owner")
+    response = client.post(
+        "/api/uploads",
+        data={"kind": "KYC"},
+        files={
+            "file": (
+                "unsafe.pdf",
+                b"%PDF-1.7\n1 0 obj <</OpenAction <</S /JavaScript /JS (app.alert(1))>>>> endobj",
+                "application/pdf",
+            )
+        },
+    )
+    assert response.status_code == 400
+
+
 def test_rate_limit_and_security_headers(client, accounts):
     previous = settings.auth_rate_limit
     settings.auth_rate_limit = 2
@@ -50,6 +66,48 @@ def test_rate_limit_and_security_headers(client, accounts):
     response = client.get("/healthz")
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-request-id"]
+    assert response.headers["permissions-policy"]
+
+
+def test_admin_cors_preflight_allows_protected_updates(client):
+    response = client.options(
+        "/api/v1/admin/matching-config",
+        headers={
+            "Origin": settings.cors_origins[0],
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "content-type,x-tamp-request",
+        },
+    )
+    assert response.status_code == 200
+    assert "PUT" in response.headers["access-control-allow-methods"]
+
+
+def test_password_reset_uses_high_entropy_token(client, accounts):
+    reset = result(
+        rpc(client, "auth.requestPasswordReset", {"email": "owner@example.com"}, True)
+    )
+    assert len(reset["devCode"]) >= 32
+
+
+def test_login_attempts_are_limited_per_account(client, accounts):
+    previous = settings.auth_account_attempts
+    settings.auth_account_attempts = 2
+    try:
+        for _ in range(2):
+            assert rpc(
+                client,
+                "auth.login",
+                {"email": "owner@example.com", "password": "incorrect-password"},
+                True,
+            ).status_code == 401
+        assert rpc(
+            client,
+            "auth.login",
+            {"email": "owner@example.com", "password": "Testing-password-123"},
+            True,
+        ).status_code == 429
+    finally:
+        settings.auth_account_attempts = previous
 
 
 def test_webhook_ssrf_and_permissions(client, accounts):
@@ -87,6 +145,7 @@ def test_masked_truck_does_not_accept_forged_scoring_inputs(client, accounts):
         client,
         "matching.score",
         {"load": load, "trucks": [truck], "operators": [], "owner": accounts["owner"]},
+        True,
     )
     assert response.status_code == 403
 
