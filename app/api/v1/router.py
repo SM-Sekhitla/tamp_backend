@@ -16,6 +16,8 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, select
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +34,116 @@ from app.services.storage import store
 
 router = APIRouter()
 logger = logging.getLogger("tamp.api")
+
+
+class PermissionToggle(BaseModel):
+    enabled: bool
+
+
+class MatchingConfigInput(BaseModel):
+    maxPickupRadiusKm: float = Field(ge=10, le=1000)
+    minimumScore: float = Field(ge=0, le=100)
+    weights: dict[str, float]
+    requireValidLicence: bool
+    requireDocuments: bool
+    requireVerifiedParties: bool
+
+
+def _system_super_user(db, request):
+    party = current_party(db, request)
+    require(party.data.get("role") == "system_super_user", "Only the system super user may change platform access", 403)
+    return party
+
+
+@router.get("/api/v1/admin/rbac", tags=["admin"])
+async def rbac_configuration(request: Request, db: AsyncSession = Depends(get_session)):
+    def read(sync_db):
+        from app.db.models import Permission, Role, RolePermission, User
+        _system_super_user(sync_db, request)
+        permissions = list(sync_db.scalars(select(Permission).order_by(Permission.code)))
+        roles = list(sync_db.scalars(select(Role).order_by(Role.scope, Role.name)))
+        assignments = list(sync_db.scalars(select(RolePermission)))
+        return {
+            "permissions": [{"code": item.code, "description": item.description} for item in permissions],
+            "roles": [{"id": role.id, "name": role.name, "scope": role.scope, "system": role.system, "permissions": [item.permission_code for item in assignments if item.role_id == role.id]} for role in roles],
+            "userOverrides": {user.id: user.data.get("permissionOverrides", {}) for user in sync_db.scalars(select(User)) if user.data.get("permissionOverrides")},
+        }
+    return await db.run_sync(read)
+
+
+@router.put("/api/v1/admin/rbac/roles/{role_id}/permissions/{permission_code:path}", tags=["admin"])
+async def set_role_permission(role_id: str, permission_code: str, payload: PermissionToggle, request: Request, db: AsyncSession = Depends(get_session)):
+    def update(sync_db):
+        from app.db.models import Permission, Role, RolePermission
+        party = _system_super_user(sync_db, request)
+        role = sync_db.get(Role, role_id)
+        require(role is not None, "Role not found", 404)
+        require(role_id != "ROLE-SYSTEM-SUPER-USER", "System super user permissions are immutable", 409)
+        require(sync_db.get(Permission, permission_code) is not None, "Permission not found", 404)
+        require(permission_code != "platform.admin" or role.scope == "PLATFORM", "Platform administration cannot be granted to an organisation role", 409)
+        current = sync_db.get(RolePermission, {"role_id": role_id, "permission_code": permission_code})
+        if payload.enabled and current is None:
+            sync_db.add(RolePermission(role_id=role_id, permission_code=permission_code))
+        if not payload.enabled and current is not None:
+            sync_db.delete(current)
+        return {"ok": True, "roleId": role_id, "permission": permission_code, "enabled": payload.enabled, "updatedBy": party.id}
+    result = await db.run_sync(update)
+    await db.commit()
+    return result
+
+
+@router.put("/api/v1/admin/rbac/users/{user_id}/permissions/{permission_code:path}", tags=["admin"])
+async def set_user_permission(user_id: str, permission_code: str, payload: PermissionToggle, request: Request, db: AsyncSession = Depends(get_session)):
+    def update(sync_db):
+        from app.db.models import Permission, User
+        party = _system_super_user(sync_db, request)
+        user = sync_db.get(User, user_id)
+        require(user is not None, "User not found", 404)
+        require(user.data.get("role") != "system_super_user", "System super user permissions are immutable", 409)
+        require(sync_db.get(Permission, permission_code) is not None, "Permission not found", 404)
+        require(permission_code != "platform.admin" or user.data.get("role") == "ADMIN", "Platform administration cannot be granted to this user", 409)
+        overrides = dict(user.data.get("permissionOverrides", {}))
+        overrides[permission_code] = payload.enabled
+        user.data = {**user.data, "permissionOverrides": overrides}
+        return {"ok": True, "userId": user_id, "permission": permission_code, "enabled": payload.enabled, "updatedBy": party.id}
+    result = await db.run_sync(update)
+    await db.commit()
+    return result
+
+
+@router.get("/api/v1/admin/matching-config", tags=["admin"])
+async def get_matching_config(request: Request, db: AsyncSession = Depends(get_session)):
+    def read(sync_db):
+        from app.services.matching import matching_config
+        _system_super_user(sync_db, request)
+        return matching_config(sync_db)
+    return await db.run_sync(read)
+
+
+@router.put("/api/v1/admin/matching-config", tags=["admin"])
+async def set_matching_config(payload: MatchingConfigInput, request: Request, db: AsyncSession = Depends(get_session)):
+    def update(sync_db):
+        from app.core.security import now
+        from app.db.models import PlatformSetting
+        party = _system_super_user(sync_db, request)
+        value = payload.model_dump()
+        require(abs(sum(value["weights"].values()) - 100) < 0.01, "Matching weights must total 100", 400)
+        require(set(value["weights"]) == {"proximity", "capacity", "timing", "lane", "rating"}, "Matching weight fields are invalid", 400)
+        record = sync_db.get(PlatformSetting, "matching")
+        if record is None:
+            record = PlatformSetting(key="matching", value=value, updated_at=now(), updated_by=party.id)
+            sync_db.add(record)
+        else:
+            record.value = value
+            record.updated_at = now()
+            record.updated_by = party.id
+        sync_db.flush()
+        from app.services.domain import refresh_suggestions
+        refresh_suggestions(sync_db)
+        return value
+    result = await db.run_sync(update)
+    await db.commit()
+    return result
 
 
 @router.get("/api/v1/organisations/{organisation_id}/drivers/{driver_id}/documents", tags=["drivers"])

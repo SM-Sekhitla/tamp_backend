@@ -69,6 +69,16 @@ class RolePermission(Base):
     )
 
 
+class PlatformSetting(Base):
+    __tablename__ = "platform_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(Json, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class OrganisationMembership(Base):
     __tablename__ = "organisation_memberships"
     __table_args__ = (UniqueConstraint("organisation_id", "user_id"),)

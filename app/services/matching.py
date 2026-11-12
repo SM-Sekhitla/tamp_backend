@@ -2,6 +2,24 @@ import math
 from datetime import datetime, timezone
 
 from app.core.config import settings
+from app.db.models import PlatformSetting
+
+DEFAULT_MATCHING_CONFIG = {
+    "maxPickupRadiusKm": 150,
+    "minimumScore": 70,
+    "weights": {"proximity": 30, "capacity": 25, "timing": 20, "lane": 15, "rating": 10},
+    "requireValidLicence": True,
+    "requireDocuments": True,
+    "requireVerifiedParties": True,
+}
+
+
+def matching_config(db):
+    record = db.get(PlatformSetting, "matching")
+    if record is None:
+        return {**DEFAULT_MATCHING_CONFIG, "weights": dict(DEFAULT_MATCHING_CONFIG["weights"])}
+    value = record.value or {}
+    return {**DEFAULT_MATCHING_CONFIG, **value, "weights": {**DEFAULT_MATCHING_CONFIG["weights"], **value.get("weights", {})}}
 
 BODIES = {
     "GENERAL_PALLETISED": ["TAUTLINER", "FLATBED", "DROPSIDE"],
@@ -65,7 +83,10 @@ def _capacity_score(utilisation):
     return max(22.5, 25 - 2.5 * ((min(utilisation, 1) - 0.92) / 0.08))
 
 
-def score(load, truck, operator, owner):
+def score(load, truck, operator, owner, config=None):
+    config = config or DEFAULT_MATCHING_CONFIG
+    radius = float(config["maxPickupRadiusKm"])
+    weights = config["weights"]
     km = distance(load["origin"], truck["currentLocation"])
     start = max(dt(load["pickupWindow"]["from"]), dt(truck["availableFrom"]))
     end = min(dt(load["pickupWindow"]["to"]), dt(truck["availableTo"]))
@@ -80,17 +101,17 @@ def score(load, truck, operator, owner):
         ("R-CAPACITY", "Payload capacity", truck["payloadCapacityKg"] >= load["weightKg"]),
         ("R-BODY", "Compatible equipment", truck["bodyType"] in BODIES[load["cargoType"]]),
         ("R-WINDOW", "Availability overlaps pickup", end >= start),
-        ("R-RADIUS", "Within 150 km", km <= 150),
+        ("R-RADIUS", f"Within {radius:g} km", km <= radius),
         ("R-STATUS", "Truck available", truck["status"] == "AVAILABLE"),
-        ("R-LICENCE", "Vehicle licence number and expiry valid through pickup", licence_valid),
-        ("R-DOCUMENTS", "Required vehicle documents uploaded", documents_complete),
+        ("R-LICENCE", "Vehicle licence number and expiry valid through pickup", licence_valid or not config["requireValidLicence"]),
+        ("R-DOCUMENTS", "Required vehicle documents uploaded", documents_complete or not config["requireDocuments"]),
         (
             "R-ACTIVE",
             "Active verified parties",
-            not operator.get("suspended")
+            not config["requireVerifiedParties"] or (not operator.get("suspended")
             and not owner.get("suspended")
             and operator.get("verification") == "VERIFIED"
-            and owner.get("verification") == "VERIFIED",
+            and owner.get("verification") == "VERIFIED"),
         ),
     ]
     utilisation = load["weightKg"] / truck["payloadCapacityKg"]
@@ -105,31 +126,31 @@ def score(load, truck, operator, owner):
         (
             "R-PROXIMITY",
             "Truck is near pickup",
-            30,
-            max(0, 30 * (1 - km / 150)),
+            weights["proximity"],
+            max(0, weights["proximity"] * (1 - km / radius)),
             f"{km} km from pickup",
         ),
         (
             "R-CAPACITY-FIT",
             "Capacity suits load",
-            25,
-            _capacity_score(utilisation),
+            weights["capacity"],
+            _capacity_score(utilisation) * weights["capacity"] / 25,
             f"{utilisation:.0%} utilisation; 80–92% is the preferred operating range",
         ),
         (
             "R-TIMING",
             "Pickup timing",
-            20,
-            20 * max(0, min(1, overlap_hours / 6)),
+            weights["timing"],
+            weights["timing"] * max(0, min(1, overlap_hours / 6)),
             f"{overlap_hours:.1f} hours of pickup-window overlap; full score at 6 hours",
         ),
         (
             "R-LANE",
             "Preferred lane",
-            15,
-            15
+            weights["lane"],
+            weights["lane"]
             if lane
-            else 7.5
+            else weights["lane"] / 2
             if truck["currentLocation"]["province"] == load["destination"]["province"]
             else 0,
             "Exact saved lane" if lane else "Destination province fit" if truck["currentLocation"]["province"] == load["destination"]["province"] else "No preferred-lane fit",
@@ -137,8 +158,8 @@ def score(load, truck, operator, owner):
         (
             "R-RATING",
             "Operator rating",
-            10,
-            2 * operator["ratingAvg"] if operator.get("ratingAvg") is not None else 5,
+            weights["rating"],
+            weights["rating"] * operator["ratingAvg"] / 5 if operator.get("ratingAvg") is not None else weights["rating"] / 2,
             "New to TAMP — no rating yet"
             if operator.get("ratingAvg") is None
             else str(operator["ratingAvg"]),

@@ -124,10 +124,12 @@ def seed_rbac(db):
         if db.get(Permission, code) is None:
             db.add(Permission(code=code, description=description))
     db.flush()
+    created_roles = set()
     for legacy_role, definition in ROLE_DEFINITIONS.items():
         role_id = ROLE_IDS[legacy_role]
         role = db.get(Role, role_id)
         if role is None:
+            created_roles.add(role_id)
             role = Role(
                 id=role_id,
                 name=definition["name"],
@@ -144,7 +146,10 @@ def seed_rbac(db):
                 select(RolePermission.permission_code).where(RolePermission.role_id == role_id)
             )
         )
-        for code in definition["permissions"] - existing:
+        # Built-in defaults are seeded only with a new role. Administrators may
+        # intentionally remove a permission later; startup must not restore it.
+        defaults = definition["permissions"] if role_id in created_roles else set()
+        for code in defaults - existing:
             db.add(RolePermission(role_id=role_id, permission_code=code))
     db.flush()
 
@@ -287,6 +292,14 @@ def permission_codes(db, user, organisation_id=None):
             )
         )
     )
+    overrides = user.data.get("permissionOverrides", {})
+    for code, allowed in overrides.items():
+        if code not in PERMISSIONS:
+            continue
+        if allowed:
+            effective.add(code)
+        else:
+            effective.discard(code)
     if (
         user.data.get("role") not in {"ADMIN", "system_super_user"}
         and user.data.get("verification") != "VERIFIED"

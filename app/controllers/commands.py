@@ -12,7 +12,7 @@ from app.core.security import iso, new_id, now
 from app.db.models import Party, VehiclePosition
 from app.services.domain import audit, lock_domain, organisation_user_ids
 from app.services.maps import verify_route_token
-from app.services.matching import dt, score
+from app.services.matching import dt, matching_config, score
 from app.services.records import needed, put, rows
 
 STEPS = [
@@ -535,6 +535,7 @@ def handle(action, data, db, request, response, party):
         },
         operator.data,
         owner.data,
+        matching_config(db),
     )
     require(checked["passed"], "Truck no longer meets the load requirements", 409)
     other_active = [

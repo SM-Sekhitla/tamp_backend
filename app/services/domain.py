@@ -7,7 +7,7 @@ from app.core.errors import require
 from app.core.security import iso, new_id
 from app.db.models import OrganisationMembership, Party
 from app.schemas.domain import SCHEMAS
-from app.services.matching import BODIES, distance, money, score
+from app.services.matching import BODIES, distance, matching_config, money, score
 from app.services.records import get, needed, put, rows
 
 COLLECTIONS = [
@@ -463,6 +463,7 @@ def sync(db, party, delta):
                         truck,
                         db.get(Party, truck["transporterId"]).data,
                         db.get(Party, load["ownerId"]).data,
+                        matching_config(db),
                     )
                     require(result["passed"], "Truck does not meet load requirements", 409)
                     data.update(
@@ -607,11 +608,12 @@ def refresh_suggestions(db):
         if load["status"] != "POSTED" or dt(load["pickupWindow"]["to"]) < now():
             continue
         for truck in trucks:
-            result = score(load, truck, parties[truck["transporterId"]], parties[load["ownerId"]])
+            config = matching_config(db)
+            result = score(load, truck, parties[truck["transporterId"]], parties[load["ownerId"]], config)
             old = existing.get((load["id"], truck["id"]))
             if old and old.data["status"] != "SUGGESTED":
                 continue
-            if not result["passed"]:
+            if not result["passed"] or result["score"] < config["minimumScore"]:
                 if old:
                     old.data = {**old.data, "status": "EXPIRED"}
                 continue
@@ -630,7 +632,7 @@ def refresh_suggestions(db):
                 createdAt=old.data["createdAt"] if old else iso(),
             )
             put(db, "matches", data, load["ownerId"])
-            if old is None and result["score"] >= 70:
+            if old is None:
                 from app.services.notifications import notify_organisation
                 from app.services.rbac import ROLE_IDS
 

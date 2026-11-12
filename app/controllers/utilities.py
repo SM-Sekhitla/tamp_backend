@@ -52,7 +52,7 @@ def handle(procedure, data, db, request, response, party):
             # Never expose private contact fields through score previews.
             public = {**op.data, "email": "", "phone": ""}
             public.pop("kycDocument", None)
-            scored = matching.score(ld, truck, public, owner.data)
+            scored = matching.score(ld, truck, public, owner.data, matching.matching_config(db))
             scored["truck"] = {**truck, "registration": "•••" + truck["registration"][-3:]}
             scored["truck"].pop("documents", None)
             result.append(scored)
