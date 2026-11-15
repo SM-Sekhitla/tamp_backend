@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -456,22 +457,25 @@ async def route(data):
     result = None
     if settings.routing_provider == "valhalla" and settings.valhalla_url:
         try:
-            result = await provider_request(
-                "POST",
-                settings.valhalla_url.rstrip("/") + "/route",
-                json={
-                    "locations": [
-                        {"lat": point.lat, "lon": point.lng, "type": "break"}
-                        for point in points
-                    ],
-                    "costing": "truck",
-                    "units": "kilometers",
-                    "shape_format": "geojson",
-                    "directions_options": {"units": "kilometers"},
-                },
-                headers={"User-Agent": "TAMP/1.0 (freight routing)"},
+            result = await asyncio.wait_for(
+                provider_request(
+                    "POST",
+                    settings.valhalla_url.rstrip("/") + "/route",
+                    json={
+                        "locations": [
+                            {"lat": point.lat, "lon": point.lng, "type": "break"}
+                            for point in points
+                        ],
+                        "costing": "truck",
+                        "units": "kilometers",
+                        "shape_format": "geojson",
+                        "directions_options": {"units": "kilometers"},
+                    },
+                    headers={"User-Agent": "TAMP/1.0 (freight routing)"},
+                ),
+                timeout=10,
             )
-        except AppError:
+        except (AppError, TimeoutError):
             # Public routing services are an enhancement, not a transaction
             # dependency. Preserve the bilateral acceptance workflow with a
             # visibly estimated, signed route when the provider is unavailable.
