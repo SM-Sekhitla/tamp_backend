@@ -364,7 +364,14 @@ def has_permission(db, user, code):
 
 
 def require_permission(db, user, code):
-    require(has_permission(db, user, code), "You do not have permission to perform this action", 403)
+    if has_permission(db, user, code):
+        return
+    if (
+        user.data.get("role") not in {"ADMIN", "system_super_user"}
+        and user.data.get("verification") != "VERIFIED"
+    ):
+        require(False, "Account verification is required before changes can be made", 403)
+    require(False, f"Your organisation role does not include the required permission: {code}", 403)
 
 
 PROCEDURE_PERMISSIONS = {
