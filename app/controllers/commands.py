@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.errors import require
 from app.core.security import iso, new_id, now
 from app.db.models import Party, VehiclePosition
-from app.services.domain import audit, lock_domain, organisation_user_ids, refresh_suggestions
+from app.services.domain import audit, lock_domain, organisation_user_ids
 from app.services.maps import verify_route_token
 from app.services.matching import dt, matching_config, score
 from app.services.records import needed, put, rows
@@ -93,9 +93,11 @@ def same_point(left, right):
 
 def prepare_offer(db, party, load, truck, match, data):
     require(party.data["verification"] == "VERIFIED", "Account verification is required", 403)
+    organisation_users = organisation_user_ids(db, party)
     require(
-        party.id in [load["ownerId"], truck["transporterId"]],
-        "Only a matched party may prepare terms",
+        load["ownerId"] in organisation_users
+        or truck["transporterId"] in organisation_users,
+        "Only a matched organisation may prepare terms",
     )
     require(match["status"] in ["SUGGESTED", "OFFERED", "ACCEPTED"], "Match cannot be reviewed", 409)
     require(dt(match["expiresAt"]) > now(), "Match expired", 409)
@@ -229,11 +231,6 @@ def handle(action, data, db, request, response, party):
     d = data.model_dump(mode="json", exclude_none=True)
     lock_domain(db)
     load = needed(db, "loads", d["loadId"], True).data
-    # The engagement board can discover a qualified pair from a live score
-    # before a persisted suggestion exists (for example after matching controls
-    # change). Materialise that suggestion before preparing reviewed terms.
-    if action == "prepareOffer":
-        refresh_suggestions(db)
     candidates = [
         r.data
         for r in rows(db, "matches")
@@ -241,6 +238,51 @@ def handle(action, data, db, request, response, party):
         and r.data["status"] in ["SUGGESTED", "OFFERED", "ACCEPTED", "CONFIRMED"]
         and (not d.get("truckId") or r.data["truckPostingId"] == d["truckId"])
     ]
+    # A live preview is allowed to discover a newly eligible pair before the
+    # periodic suggestion refresh has persisted it. Materialise the exact pair
+    # being reviewed here, under the same transaction lock, so the UI can never
+    # offer Review and then fail merely because a background refresh has not run.
+    if action == "prepareOffer" and not candidates and d.get("truckId"):
+        truck = needed(db, "trucks", d["truckId"], True).data
+        organisation_users = organisation_user_ids(db, party)
+        require(
+            load["ownerId"] in organisation_users
+            or truck["transporterId"] in organisation_users,
+            "This load and truck are not available to your organisation",
+            403,
+        )
+        require(load["status"] == "POSTED", "Load is no longer available", 409)
+        operator = db.get(Party, truck["transporterId"])
+        owner = db.get(Party, load["ownerId"])
+        require(operator is not None and owner is not None, "Match parties are unavailable", 409)
+        config = matching_config(db)
+        checked = score(load, truck, operator.data, owner.data, config)
+        require(
+            checked["passed"],
+            "This truck no longer meets the load requirements",
+            409,
+        )
+        require(
+            checked["score"] >= config["minimumScore"],
+            f"The current match score ({checked['score']}) is below the required minimum ({config['minimumScore']})",
+            409,
+        )
+        match = {
+            "id": new_id("MT"),
+            "loadId": load["id"],
+            "truckPostingId": truck["id"],
+            "score": checked["score"],
+            "breakdown": checked["breakdown"],
+            "hardFilterResults": checked["hardFilterResults"],
+            "status": "SUGGESTED",
+            "initiatedBy": "SYSTEM",
+            "expiresAt": min(
+                now() + timedelta(days=1), dt(load["pickupWindow"]["to"])
+            ).isoformat(),
+            "createdAt": iso(),
+        }
+        put(db, "matches", match, load["ownerId"])
+        candidates = [match]
     candidates.sort(
         key=lambda m: {"CONFIRMED": 0, "ACCEPTED": 1, "OFFERED": 2, "SUGGESTED": 3}[m["status"]]
     )
@@ -251,7 +293,11 @@ def handle(action, data, db, request, response, party):
         return prepare_offer(db, party, load, truck, match, data)
     if action == "requestJob":
         require(party.data["verification"] == "VERIFIED", "Account verification is required", 403)
-        require(party.id == truck["transporterId"], "Only this carrier may request the job", 403)
+        require(
+            truck["transporterId"] in organisation_user_ids(db, party),
+            "Only this carrier organisation may request the job",
+            403,
+        )
         require(load["status"] == "POSTED", "Load is no longer available", 409)
         require(match["status"] == "SUGGESTED", "This job has already been requested", 409)
         require(dt(match["expiresAt"]) > now(), "Match expired", 409)
@@ -547,15 +593,19 @@ def handle(action, data, db, request, response, party):
         notify(db, load["ownerId"], load["id"], f"Trip {status.lower().replace('_', ' ')}")
         return {"ok": True, "status": status, "progressPct": progress}
     require(party.data["verification"] == "VERIFIED", "Account verification is required", 403)
+    organisation_users = organisation_user_ids(db, party)
     if action == "confirmMatch":
-        require(party.id == truck["transporterId"], "Only this carrier may confirm")
+        require(
+            truck["transporterId"] in organisation_users,
+            "Only this carrier organisation may confirm",
+        )
         require(
             match["status"] == "ACCEPTED" and load["status"] == "MATCHED",
             "Owner acceptance required",
             409,
         )
     else:
-        require(party.id == load["ownerId"], "Only the load owner may accept")
+        require(load["ownerId"] in organisation_users, "Only the freight owner organisation may accept")
         require(load["status"] == "POSTED", "Load is no longer available", 409)
         require(
             match["status"]
