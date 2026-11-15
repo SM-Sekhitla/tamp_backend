@@ -304,6 +304,7 @@ class InvoiceAction(Input):
 
 class DispatchAction(Input):
     tripId: str = Field(max_length=80)
+    dispatchId: str | None = Field(default=None, max_length=80)
     action: Literal["ASSIGN", "ACCEPT", "DECLINE", "CANCEL"]
     driverEmail: str | None = Field(default=None, max_length=254)
     note: str | None = Field(default=None, max_length=1000)

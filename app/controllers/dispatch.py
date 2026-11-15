@@ -28,7 +28,12 @@ def handle(action, data, db, request, response, party):
         for r in rows(db, "dispatches")
         if r.data["tripId"] == trip["id"] and r.data["status"] in ["OFFERED", "ACCEPTED"]
     ]
-    current = max(active, key=lambda item: item["offeredAt"], default=None)
+    requested_dispatch_id = values.get("dispatchId")
+    current = (
+        next((item for item in active if item["id"] == requested_dispatch_id), None)
+        if requested_dispatch_id
+        else max(active, key=lambda item: item["offeredAt"], default=None)
+    )
     operation = values["action"]
 
     if operation == "ASSIGN":
