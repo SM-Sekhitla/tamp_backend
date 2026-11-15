@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.errors import require
 from app.core.security import iso, new_id, now
 from app.db.models import Party, VehiclePosition
-from app.services.domain import audit, lock_domain, organisation_user_ids
+from app.services.domain import audit, lock_domain, organisation_user_ids, refresh_suggestions
 from app.services.maps import verify_route_token
 from app.services.matching import dt, matching_config, score
 from app.services.records import needed, put, rows
@@ -229,6 +229,11 @@ def handle(action, data, db, request, response, party):
     d = data.model_dump(mode="json", exclude_none=True)
     lock_domain(db)
     load = needed(db, "loads", d["loadId"], True).data
+    # The engagement board can discover a qualified pair from a live score
+    # before a persisted suggestion exists (for example after matching controls
+    # change). Materialise that suggestion before preparing reviewed terms.
+    if action == "prepareOffer":
+        refresh_suggestions(db)
     candidates = [
         r.data
         for r in rows(db, "matches")
@@ -244,6 +249,42 @@ def handle(action, data, db, request, response, party):
     truck = needed(db, "trucks", match["truckPostingId"], True).data
     if action == "prepareOffer":
         return prepare_offer(db, party, load, truck, match, data)
+    if action == "requestJob":
+        require(party.data["verification"] == "VERIFIED", "Account verification is required", 403)
+        require(party.id == truck["transporterId"], "Only this carrier may request the job", 403)
+        require(load["status"] == "POSTED", "Load is no longer available", 409)
+        require(match["status"] == "SUGGESTED", "This job has already been requested", 409)
+        require(dt(match["expiresAt"]) > now(), "Match expired", 409)
+        checked = score(
+            load,
+            truck,
+            db.get(Party, truck["transporterId"]).data,
+            db.get(Party, load["ownerId"]).data,
+            matching_config(db),
+        )
+        require(checked["passed"], "Truck no longer meets the load requirements", 409)
+        require(
+            checked["score"] >= matching_config(db)["minimumScore"],
+            "The match score is below the current minimum",
+            409,
+        )
+        offer = accepted_offer(db, data, load, truck, match)
+        requested = {
+            **match,
+            "status": "OFFERED",
+            "initiatedBy": "TRANSPORTER",
+            "score": checked["score"],
+            "breakdown": checked["breakdown"],
+            "hardFilterResults": checked["hardFilterResults"],
+            "activeOfferId": offer["id"],
+            "offerRevision": offer["revision"],
+            "termsHash": offer["termsHash"],
+            "requestedAt": iso(),
+        }
+        put(db, "matches", requested)
+        audit(db, party, "JOB_REQUESTED", "MATCH", match["id"], f"{truck['registration']} requested {load['id']}")
+        notify(db, load["ownerId"], load["id"], "New carrier job request")
+        return {"ok": True, "matchId": match["id"]}
     if action in ["reportIncident", "cancelTrip"]:
         trip = next(
             (r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]),

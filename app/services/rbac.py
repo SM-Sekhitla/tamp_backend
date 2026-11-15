@@ -393,6 +393,7 @@ PROCEDURE_PERMISSIONS = {
     "loads.list": "loads.read",
     "loads.create": "loads.manage",
     "commands.prepareOffer": "matches.manage",
+    "commands.requestJob": "matches.manage",
     "commands.acceptMatch": "matches.manage",
     "commands.confirmMatch": "matches.manage",
     "commands.acceptRequest": "matches.manage",
