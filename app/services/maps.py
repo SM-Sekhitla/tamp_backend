@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import re
 import time
 from datetime import datetime, timedelta
@@ -428,28 +429,59 @@ async def reverse(data):
     return {**place, "lat": data.lat, "lng": data.lng}
 
 
-async def route(data):
-    if settings.routing_provider != "valhalla" or not settings.valhalla_url:
-        return None
-    result = await provider_request(
-        "POST",
-        settings.valhalla_url.rstrip("/") + "/route",
-        json={
-            "locations": [
-                {"lat": point.lat, "lon": point.lng, "type": "break"}
-                for point in [data.origin, *data.waypoints, data.destination]
-            ],
-            "costing": "truck",
-            "units": "kilometers",
-            "shape_format": "geojson",
-            "directions_options": {"units": "kilometers"},
+def _estimated_route(data):
+    points = [data.origin, *data.waypoints, data.destination]
+    distance_km = 0.0
+    for start, end in zip(points, points[1:]):
+        lat1, lat2 = math.radians(start.lat), math.radians(end.lat)
+        dlat = lat2 - lat1
+        dlng = math.radians(end.lng - start.lng)
+        hav = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+        distance_km += 6371.0 * 2 * math.asin(math.sqrt(hav)) * 1.25
+    route_result = {
+        "distanceKm": round(distance_km, 1),
+        "durationMin": max(1, round(distance_km)),  # conservative 60 km/h estimate
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[point.lng, point.lat] for point in points],
         },
-        headers={"User-Agent": "TAMP/1.0 (freight routing)"},
-    )
+        "provider": "estimated",
+    }
+    token, expires_at = _route_token(route_result, data.origin, data.destination, data.waypoints)
+    return {**route_result, "routeToken": token, "expiresAt": expires_at}
+
+
+async def route(data):
+    points = [data.origin, *data.waypoints, data.destination]
+    result = None
+    if settings.routing_provider == "valhalla" and settings.valhalla_url:
+        try:
+            result = await provider_request(
+                "POST",
+                settings.valhalla_url.rstrip("/") + "/route",
+                json={
+                    "locations": [
+                        {"lat": point.lat, "lon": point.lng, "type": "break"}
+                        for point in points
+                    ],
+                    "costing": "truck",
+                    "units": "kilometers",
+                    "shape_format": "geojson",
+                    "directions_options": {"units": "kilometers"},
+                },
+                headers={"User-Agent": "TAMP/1.0 (freight routing)"},
+            )
+        except AppError:
+            # Public routing services are an enhancement, not a transaction
+            # dependency. Preserve the bilateral acceptance workflow with a
+            # visibly estimated, signed route when the provider is unavailable.
+            result = None
+    if result is None:
+        return _estimated_route(data)
     trip = result.get("trip", {})
     legs = trip.get("legs", [])
     if not legs:
-        return None
+        return _estimated_route(data)
     coordinates = []
     for leg in legs:
         shape = leg.get("shape")
@@ -459,7 +491,8 @@ async def route(data):
         elif isinstance(shape, str):
             points = _decode_polyline6(shape)
             coordinates.extend(points[1:] if coordinates else points)
-    require(len(coordinates) >= 2, "Routing provider returned no route geometry", 503)
+    if len(coordinates) < 2:
+        return _estimated_route(data)
     summary = trip.get("summary", {})
     route_result = {
         "distanceKm": round(float(summary.get("length", 0)), 1),
