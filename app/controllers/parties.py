@@ -1,5 +1,5 @@
 from app.api.deps import is_admin, role
-from app.controllers.auth import create_party, find_email
+from app.controllers.auth import create_party, find_email, set_session
 from app.core.errors import require
 from app.core.security import iso
 from app.db.models import User
@@ -32,6 +32,11 @@ def handle(action, data, db, request, response, party):
         user.onboarding = {
             k: d[k] for k in ["userType", "business", "driver", "documents"] if k in d
         }
+        # The email code has been consumed successfully, so establish the
+        # pending account's restricted session. This lets registration upload
+        # private KYC files immediately without exposing an anonymous upload
+        # endpoint or bypassing the normal ownership checks.
+        set_session(db, user, response, request)
         return {"id": user.id}
     if action == "list":
         from app.services.domain import snapshot
@@ -83,4 +88,24 @@ def handle(action, data, db, request, response, party):
             "kycDocument": {"name": d["name"], "url": d["url"], "uploadedAt": iso()},
         }
         return party.data
+    if action == "attachRegistrationDocuments":
+        from app.services.domain import audit
+        from app.services.storage import own_upload
+
+        documents = d["documents"]
+        for document in documents:
+            own_upload(db, party, document["url"], "KYC")
+        party.onboarding = {
+            **(party.onboarding or {}),
+            "documents": documents,
+        }
+        audit(
+            db,
+            party,
+            "REGISTRATION_DOCUMENTS_ATTACHED",
+            "USER",
+            party.id,
+            f"{len(documents)} registration documents attached",
+        )
+        return party.onboarding
     raise AssertionError(action)

@@ -68,6 +68,18 @@ class Register(Login):
     documents: list[str] = Field(default_factory=list, max_length=20)
 
 
+class RegistrationDocument(Input):
+    label: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=300)
+    contentType: str | None = Field(default=None, max_length=150)
+    size: int | None = Field(default=None, ge=1)
+
+
+class RegistrationDocuments(Input):
+    documents: list[RegistrationDocument] = Field(min_length=1, max_length=20)
+
+
 class PasswordChange(Input):
     currentPassword: str = Field(max_length=128)
     newPassword: str = Field(min_length=12, max_length=128)

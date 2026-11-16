@@ -752,5 +752,9 @@ async def download(
         path,
         media_type=data["contentType"],
         filename=data["filename"],
-        content_disposition_type="attachment" if data["kind"] == "KYC" else "inline",
+        content_disposition_type=(
+            "attachment"
+            if request.query_params.get("download") == "1"
+            else "inline"
+        ),
     )

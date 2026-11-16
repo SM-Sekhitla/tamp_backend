@@ -61,6 +61,7 @@ group(
         ("findDriver", a.Email, False, False),
         ("onboarding", a.PartyId, False, False),
         ("uploadKyc", a.Kyc, True, False),
+        ("attachRegistrationDocuments", a.RegistrationDocuments, True, False),
     ],
 )
 group(
@@ -73,6 +74,7 @@ group(
         ("findDriver", a.Email, False, False),
         ("onboarding", a.PartyId, False, False),
         ("uploadKyc", a.Kyc, True, False),
+        ("attachRegistrationDocuments", a.RegistrationDocuments, True, False),
     ],
 )
 group(
