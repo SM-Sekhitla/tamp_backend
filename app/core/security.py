@@ -44,7 +44,7 @@ def validate_new_password(password):
         "letmein123456",
     }
     return (
-        len(value) >= 12
+        len(value) >= 8
         and value.casefold() not in common
         and any(character.islower() for character in value)
         and any(character.isupper() for character in value)

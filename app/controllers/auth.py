@@ -26,7 +26,7 @@ def find_email(db, email):
 def create_party(db, email, password, role, name, company, **extra):
     require(
         validate_new_password(password),
-        "Use at least 12 characters with upper-case, lower-case and a number",
+        "Use at least 8 characters with upper-case, lower-case and a number",
         400,
     )
     ident = new_id("P")
@@ -206,7 +206,7 @@ def handle(action, data, db, request, response, party):
         require(user is not None, "Invalid or expired verification code", 400)
         require(
             validate_new_password(d["newPassword"]),
-            "Use at least 12 characters with upper-case, lower-case and a number",
+            "Use at least 8 characters with upper-case, lower-case and a number",
             400,
         )
         user.password_hash = passwords.hash(d["newPassword"])
@@ -221,7 +221,7 @@ def handle(action, data, db, request, response, party):
         )
         require(
             validate_new_password(d["newPassword"]),
-            "Use at least 12 characters with upper-case, lower-case and a number",
+            "Use at least 8 characters with upper-case, lower-case and a number",
             400,
         )
         party.password_hash = passwords.hash(d["newPassword"])

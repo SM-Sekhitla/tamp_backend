@@ -3,8 +3,17 @@ from io import BytesIO
 from PIL import Image
 
 from app.core.config import settings
+from app.core.security import validate_new_password
 
 from .conftest import async_run, db_call, login, result, rpc
+
+
+def test_password_policy_uses_eight_character_minimum():
+    assert validate_new_password("Good123A")
+    assert not validate_new_password("Good12A")
+    assert not validate_new_password("alllowercase1")
+    assert not validate_new_password("ALLUPPERCASE1")
+    assert not validate_new_password("NoNumbers")
 
 
 def test_upload_validation_and_private_download(client, accounts):
