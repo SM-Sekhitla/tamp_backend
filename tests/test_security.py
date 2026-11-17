@@ -4,6 +4,7 @@ from PIL import Image
 
 from app.core.config import settings
 from app.core.security import validate_new_password
+from app.services.rbac import UNVERIFIED_ALLOWED_MUTATIONS
 
 from .conftest import async_run, db_call, login, result, rpc
 
@@ -14,6 +15,11 @@ def test_password_policy_uses_eight_character_minimum():
     assert not validate_new_password("alllowercase1")
     assert not validate_new_password("ALLUPPERCASE1")
     assert not validate_new_password("NoNumbers")
+
+
+def test_pending_registration_can_attach_its_private_documents():
+    assert "users.attachRegistrationDocuments" in UNVERIFIED_ALLOWED_MUTATIONS
+    assert "parties.attachRegistrationDocuments" in UNVERIFIED_ALLOWED_MUTATIONS
 
 
 def test_upload_validation_and_private_download(client, accounts):
