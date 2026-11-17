@@ -76,25 +76,9 @@ def store(db, party, content, filename, kind):
             "PDFs are not accepted for this upload",
             400,
         )
-        # Reject active PDF features. This is deliberately conservative for
-        # operational documents and complements (but does not replace) malware
-        # scanning at the deployment boundary.
-        lowered = content.lower()
-        require(
-            not any(
-                marker in lowered
-                for marker in (
-                    b"/javascript",
-                    b"/js",
-                    b"/launch",
-                    b"/embeddedfile",
-                    b"/openaction",
-                    b"/aa",
-                )
-            ),
-            "This PDF contains active or embedded content and cannot be uploaded",
-            400,
-        )
+        # Document PDFs may contain signatures, forms, embedded fonts or
+        # scanner metadata. Accept those features and rely on the configured
+        # malware scanner, private ownership checks and download isolation.
         mime = "application/pdf"
     else:
         try:

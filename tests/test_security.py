@@ -33,7 +33,7 @@ def test_upload_validation_and_private_download(client, accounts):
     assert rpc(client, "auth.updateProfile", {"avatarUrl": file["url"]}, True).status_code == 403
 
 
-def test_active_pdf_content_is_rejected(client, accounts):
+def test_document_pdf_with_embedded_features_is_accepted(client, accounts):
     login(client, "owner")
     response = client.post(
         "/api/uploads",
@@ -46,7 +46,10 @@ def test_active_pdf_content_is_rejected(client, accounts):
             )
         },
     )
-    assert response.status_code == 400
+    assert response.status_code == 200, response.text
+    uploaded = response.json()
+    assert uploaded["contentType"] == "application/pdf"
+    assert client.get(uploaded["url"]).status_code == 200
 
 
 def test_rate_limit_and_security_headers(client, accounts):
