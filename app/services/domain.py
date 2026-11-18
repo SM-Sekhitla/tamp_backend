@@ -406,6 +406,14 @@ def sync(db, party, delta):
                     and (data["transporterId"] in organisation_users or is_admin(party))
                 )
                 require(not old or old["transporterId"] == data["transporterId"])
+                # Review decisions are platform-owned metadata. Accept them in
+                # the round-trip schema, but never trust a client-supplied edit.
+                if old:
+                    data["documentReviews"] = deepcopy(old.get("documentReviews", {}))
+                else:
+                    data.pop("documentReviews", None)
+                # This view model is rebuilt from Upload records by snapshot().
+                data.pop("documentMetadata", None)
                 require(
                     (old and data["status"] == old["status"])
                     or data["status"] in ["AVAILABLE", "OFFLINE"],

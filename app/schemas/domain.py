@@ -186,6 +186,13 @@ class StoredDocument(Input):
     reviewedBy: str | None = Field(default=None, max_length=100)
 
 
+class DocumentReview(Input):
+    reviewStatus: Literal["PENDING", "APPROVED", "REJECTED"] = "PENDING"
+    reviewReason: str | None = Field(default=None, max_length=2000)
+    reviewedAt: str | None = Field(default=None, max_length=80)
+    reviewedBy: str | None = Field(default=None, max_length=100)
+
+
 class Truck(Input):
     id: str = Field(min_length=1, max_length=80)
     transporterId: str
@@ -211,6 +218,9 @@ class Truck(Input):
     photos: list[str] = Field(default_factory=list, max_length=20)
     documents: list[str] = Field(default_factory=list, max_length=20)
     documentMetadata: list[StoredDocument] = Field(default_factory=list, max_length=20)
+    # Stored with the truck so platform document decisions survive edits. The
+    # sync service preserves the database value; clients cannot alter reviews.
+    documentReviews: dict[str, DocumentReview] = Field(default_factory=dict, max_length=20)
     vehicleVerification: Literal["UNVERIFIED", "PENDING", "VERIFIED", "REJECTED"] | None = None
     vehicleVerificationUpdatedAt: str | None = Field(default=None, max_length=80)
 
