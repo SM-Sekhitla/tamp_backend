@@ -34,11 +34,25 @@ def handle(action, data, db, request, response, party):
         return {"updated": count}
     require(action == "send", "Unknown message action", 404)
     values = data.model_dump(mode="json", exclude_none=True)
+    client_message_id = values.get("clientMessageId")
+    if client_message_id:
+        existing = next(
+            (
+                row.data
+                for row in rows(db, "messages")
+                if row.data.get("conversationId") == conversation["id"]
+                and row.data.get("senderId") == party.id
+                and row.data.get("clientMessageId") == client_message_id
+            ),
+            None,
+        )
+        if existing:
+            return existing
     if values.get("attachmentUrl"):
         from app.services.storage import own_upload
 
         own_upload(db, party, values["attachmentUrl"], "MESSAGE")
-    message = {"id": new_id("MS"), "conversationId": conversation["id"], "senderId": party.id, "senderRole": party.data["role"], "kind": "USER", "text": values.get("text", "").strip(), "attachmentUrl": values.get("attachmentUrl"), "attachmentName": values.get("attachmentName"), "createdAt": iso(), "readBy": [party.id]}
+    message = {"id": new_id("MS"), "clientMessageId": client_message_id, "conversationId": conversation["id"], "senderId": party.id, "senderRole": party.data["role"], "kind": "USER", "text": values.get("text", "").strip(), "attachmentUrl": values.get("attachmentUrl"), "attachmentName": values.get("attachmentName"), "createdAt": iso(), "readBy": [party.id]}
     put(db, "messages", message, party.id)
     put(db, "conversations", {**conversation, "lastMessageAt": message["createdAt"], "lastMessage": message["text"] or message.get("attachmentName") or "Attachment"})
     audit(db, party, "MESSAGE_SENT", "TRIP", conversation["tripId"], "Trip message sent")

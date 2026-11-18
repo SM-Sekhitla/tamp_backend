@@ -1,7 +1,7 @@
 from app.api.deps import is_admin, role
 from app.controllers.auth import create_party, find_email, set_session
 from app.core.errors import require
-from app.core.security import iso
+from app.core.security import iso, new_id
 from app.db.models import User
 from app.services.email import consume_code
 
@@ -58,6 +58,19 @@ def handle(action, data, db, request, response, party):
         lock_domain(db)
         user = db.get(User, d["partyId"])
         require(user is not None, "User not found", 404)
+        if d["status"] == "VERIFIED":
+            submitted_documents = (user.onboarding or {}).get("documents", [])
+            if submitted_documents:
+                require(
+                    all(
+                        isinstance(document, dict)
+                        and document.get("url")
+                        and document.get("reviewStatus") == "APPROVED"
+                        for document in submitted_documents
+                    ),
+                    "Approve every registration document before verifying this account",
+                    409,
+                )
         user.data = {**user.data, "verification": d["status"]}
         if d["status"] == "VERIFIED":
             from app.services.email import send_account_verified
@@ -92,9 +105,22 @@ def handle(action, data, db, request, response, party):
         from app.services.domain import audit
         from app.services.storage import own_upload
 
-        documents = d["documents"]
-        for document in documents:
+        submitted = d["documents"]
+        for document in submitted:
             own_upload(db, party, document["url"], "KYC")
+        uploaded_at = iso()
+        documents = [
+            {
+                **document,
+                "id": document.get("id") or new_id("RD"),
+                "category": document.get("category") or "REGISTRATION",
+                "status": document.get("status") or "PENDING",
+                "reviewStatus": document.get("reviewStatus") or "PENDING",
+                "uploadedAt": document.get("uploadedAt") or uploaded_at,
+                "uploadedBy": document.get("uploadedBy") or party.id,
+            }
+            for document in submitted
+        ]
         party.onboarding = {
             **(party.onboarding or {}),
             "documents": documents,

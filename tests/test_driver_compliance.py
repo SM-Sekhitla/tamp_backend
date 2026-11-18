@@ -27,12 +27,31 @@ def test_driver_document_folder_is_tenant_scoped(client, accounts):
     document = response.json()
     assert document["status"] == "EXPIRING"
     assert document["driverId"] == driver_id
+    assert document["url"] == document["fileUrl"]
+    assert document["category"] == "DRIVER_COMPLIANCE"
+
+    login(client, "admin")
+    reviewed = rpc(
+        client,
+        "documents.review",
+        {
+            "subjectType": "DRIVER",
+            "subjectId": driver_id,
+            "documentId": document["id"],
+            "status": "APPROVED",
+        },
+        True,
+    )
+    assert reviewed.status_code == 200, reviewed.text
+
+    login(client, "carrier")
 
     listing = client.get(
         f"/api/v1/organisations/{organisation_id}/drivers/{driver_id}/documents"
     )
     assert listing.status_code == 200
     assert listing.json()[0]["documentNumber"] == "DL-1234"
+    assert listing.json()[0]["reviewStatus"] == "APPROVED"
 
     login(client, "driver")
     forbidden = client.get(

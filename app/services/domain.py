@@ -68,6 +68,34 @@ def audit(db, party, event, kind, subject, message):
         ),
         party.id,
     )
+
+
+def attach_truck_document_metadata(db, truck):
+    upload_by_url = {
+        row.data.get("url"): row.data
+        for row in rows(db, "uploads")
+        if row.owner_id == truck["transporterId"]
+    }
+    categories = ["VEHICLE_LICENCE", "ROADWORTHY", "INSURANCE"]
+    reviews = truck.get("documentReviews", {})
+    truck["documentMetadata"] = [
+        {
+            "id": upload.get("id"),
+            "name": upload.get("filename", f"Vehicle document {index + 1}"),
+            "url": url,
+            "contentType": upload.get("contentType"),
+            "size": upload.get("size"),
+            "category": categories[index] if index < len(categories) else "VEHICLE_DOCUMENT",
+            "status": "PENDING",
+            "reviewStatus": reviews.get(url, {}).get("reviewStatus", "PENDING"),
+            "reviewReason": reviews.get(url, {}).get("reviewReason"),
+            "reviewedAt": reviews.get(url, {}).get("reviewedAt"),
+            "reviewedBy": reviews.get(url, {}).get("reviewedBy"),
+            "uploadedBy": truck["transporterId"],
+        }
+        for index, url in enumerate(truck.get("documents", []))
+        if (upload := upload_by_url.get(url)) is not None
+    ]
     for endpoint in rows(db, "webhooks"):
         if endpoint.data["active"] and (
             event in endpoint.data["events"] or "*" in endpoint.data["events"]
@@ -101,6 +129,8 @@ def audit(db, party, event, kind, subject, message):
 def snapshot(db, party):
     all_rows = {k: [deepcopy(r.data) for r in rows(db, k)] for k in COLLECTIONS}
     if is_admin(party):
+        for truck in all_rows["trucks"]:
+            attach_truck_document_metadata(db, truck)
         return {**all_rows, "parties": [party_payload(p) for p in db.scalars(select(Party))]}
     pid = party.id
     organisation_users = organisation_user_ids(db, party)
@@ -238,8 +268,11 @@ def snapshot(db, party):
     for t in result["trucks"]:
         if t["id"] not in own_trucks:
             t.pop("documents", None)
+            t.pop("documentMetadata", None)
             if t["transporterId"] not in contacts:
                 t["registration"] = "•••" + t["registration"][-3:]
+        else:
+            attach_truck_document_metadata(db, t)
     result["parties"] = parties
     return result
 
@@ -595,6 +628,9 @@ def refresh_suggestions(db):
 
     from app.core.security import now
     from app.services.matching import dt
+    from app.services.engagements import expire_stale_engagements
+
+    expire_stale_engagements(db)
 
     parties = {p.id: p.data for p in db.scalars(select(Party))}
     trucks = [r.data for r in rows(db, "trucks")]
@@ -608,6 +644,9 @@ def refresh_suggestions(db):
         if load["status"] != "POSTED" or dt(load["pickupWindow"]["to"]) < now():
             continue
         for truck in trucks:
+            from app.services.fleet import with_vehicle_verification
+
+            truck = with_vehicle_verification(db, truck)
             config = matching_config(db)
             result = score(load, truck, parties[truck["transporterId"]], parties[load["ownerId"]], config)
             old = existing.get((load["id"], truck["id"]))

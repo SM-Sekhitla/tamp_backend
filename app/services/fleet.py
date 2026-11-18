@@ -4,6 +4,14 @@ from app.core.security import iso, new_id
 from app.services.records import get, put, rows
 
 
+def with_vehicle_verification(db, truck: dict) -> dict:
+    """Overlay the permanent asset review state onto a marketplace posting."""
+    vehicle = get(db, "vehicles", truck.get("vehicleId")) if truck.get("vehicleId") else None
+    if vehicle is None:
+        return truck
+    return {**truck, "vehicleVerification": vehicle.data.get("verification", "PENDING")}
+
+
 def _vehicle_document(truck: dict, owner_id: str, existing: dict | None = None) -> dict:
     now = iso()
     return {
@@ -34,7 +42,9 @@ def sync_vehicle_for_truck(db, actor, truck: dict, old: dict | None = None) -> N
     truck["vehicleId"] = vehicle_id
     vehicle_row = get(db, "vehicles", vehicle_id, True)
     vehicle = vehicle_row.data if vehicle_row else None
-    put(db, "vehicles", _vehicle_document(truck, truck["transporterId"], vehicle), truck["transporterId"])
+    vehicle_document = _vehicle_document(truck, truck["transporterId"], vehicle)
+    truck["vehicleVerification"] = vehicle_document["verification"]
+    put(db, "vehicles", vehicle_document, truck["transporterId"])
 
     previous_driver = (old or {}).get("driverId")
     current_driver = truck.get("driverId")

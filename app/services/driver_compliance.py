@@ -15,6 +15,7 @@ DOCUMENT_TYPES = {
     "MEDICAL_CERTIFICATE",
     "EMPLOYMENT_CONTRACT",
 }
+REQUIRED_DISPATCH_DOCUMENTS = {"DRIVING_LICENCE", "PRDP"}
 
 
 def _authorize(db, party, organisation_id, driver_id, *, manage=False):
@@ -61,7 +62,14 @@ def _status(expires_at):
 
 
 def _payload(row):
-    return {**row.data, "status": _status(row.data.get("expiresAt"))}
+    data = row.data
+    return {
+        **data,
+        "url": data.get("url") or data.get("fileUrl"),
+        "category": data.get("category") or "DRIVER_COMPLIANCE",
+        "reviewStatus": data.get("reviewStatus") or "PENDING",
+        "status": _status(data.get("expiresAt")),
+    }
 
 
 def list_documents(db, party, organisation_id, driver_id):
@@ -99,12 +107,15 @@ def create_document(db, party, organisation_id, driver_id, *, document_type, doc
         "issuedAt": issued_at or None,
         "expiresAt": expires_at or None,
         "fileUrl": upload["url"],
+        "url": upload["url"],
+        "category": "DRIVER_COMPLIANCE",
         "filename": upload["filename"],
         "contentType": upload["contentType"],
         "size": upload["size"],
         "uploadedAt": iso(),
         "uploadedBy": party.id,
         "status": "VALID",
+        "reviewStatus": "PENDING",
     }
     model = MODELS["driverDocuments"]
     db.add(model(id=ident, owner_id=driver_id, organisation_id=organisation_id, driver_id=driver_id, data=data))
@@ -118,3 +129,36 @@ def delete_document(db, party, organisation_id, driver_id, document_id):
     require(row is not None and row.organisation_id == organisation_id and row.driver_id == driver_id, "Driver document not found", 404)
     row.data = {**row.data, "status": "REMOVED", "removedAt": iso(), "removedBy": party.id}
     return {"ok": True}
+
+
+def require_dispatch_compliance(db, driver, organisation_id):
+    """Block dispatch when a managed driver's required evidence is not valid."""
+
+    records = [
+        row.data
+        for row in db.scalars(
+            select(MODELS["driverDocuments"]).where(
+                MODELS["driverDocuments"].organisation_id == organisation_id,
+                MODELS["driverDocuments"].driver_id == driver.id,
+            )
+        )
+        if row.data.get("status") != "REMOVED"
+    ]
+    requires_documents = driver.data.get("requiresDriverCompliance", False) or bool(records)
+    if not requires_documents:
+        return
+    by_type = {item.get("documentType"): item for item in records}
+    missing = sorted(REQUIRED_DISPATCH_DOCUMENTS - set(by_type))
+    require(not missing, f"Driver compliance documents missing: {', '.join(missing)}", 409)
+    for document_type in REQUIRED_DISPATCH_DOCUMENTS:
+        document = by_type[document_type]
+        require(
+            document.get("reviewStatus") == "APPROVED",
+            f"Driver {document_type.lower().replace('_', ' ')} is awaiting approval",
+            409,
+        )
+        require(
+            _status(document.get("expiresAt")) != "EXPIRED",
+            f"Driver {document_type.lower().replace('_', ' ')} has expired",
+            409,
+        )

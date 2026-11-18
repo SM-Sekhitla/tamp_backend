@@ -97,6 +97,10 @@ def score(load, truck, operator, owner, config=None):
         and dt(licence_expiry) >= start
     )
     documents_complete = len(truck.get("documents", [])) >= 3
+    # Legacy records without the field remain eligible until they are next
+    # edited/migrated. Every newly synced vehicle carries an explicit review
+    # state and must be approved before matching.
+    vehicle_verified = truck.get("vehicleVerification") in (None, "VERIFIED")
     tests = [
         ("R-CAPACITY", "Payload capacity", truck["payloadCapacityKg"] >= load["weightKg"]),
         ("R-BODY", "Compatible equipment", truck["bodyType"] in BODIES[load["cargoType"]]),
@@ -105,6 +109,7 @@ def score(load, truck, operator, owner, config=None):
         ("R-STATUS", "Truck available", truck["status"] == "AVAILABLE"),
         ("R-LICENCE", "Vehicle licence number and expiry valid through pickup", licence_valid or not config["requireValidLicence"]),
         ("R-DOCUMENTS", "Required vehicle documents uploaded", documents_complete or not config["requireDocuments"]),
+        ("R-VEHICLE-REVIEW", "Vehicle compliance review approved", vehicle_verified),
         (
             "R-ACTIVE",
             "Active verified parties",

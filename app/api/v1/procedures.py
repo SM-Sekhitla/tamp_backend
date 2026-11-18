@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from app.controllers import (
     auth,
     commands,
+    documents,
     finance,
     messages,
     operations,
@@ -92,6 +93,7 @@ group(
     ],
 )
 group("vehicles", [("setVerification", a.VehicleVerification, True, False)])
+group("documents", [("list", a.Empty, False, False), ("review", a.DocumentReview, True, False)])
 group(
     "commands",
     [
@@ -179,6 +181,7 @@ def dispatch(name, data, db, request, response, party):
         "finance": finance,
         "messages": messages,
         "dispatch": dispatch_controller,
+        "documents": documents,
         "webhooks": webhooks,
         "organisations": organisations_controller,
         "vehicles": vehicles_controller,

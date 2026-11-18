@@ -46,6 +46,10 @@ def handle(procedure, data, db, request, response, party):
             tr = get(db, "trucks", proposed["id"])
             require(tr is None or tr.id in visible_trucks)
             truck = tr.data if tr else proposed
+            if tr is not None:
+                from app.services.fleet import with_vehicle_verification
+
+                truck = with_vehicle_verification(db, truck)
             require(tr is not None or truck["transporterId"] == party.id)
             op = db.get(Party, truck["transporterId"])
             require(op is not None, "Carrier not found", 404)

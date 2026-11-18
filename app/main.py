@@ -62,17 +62,37 @@ async def lifespan(app: FastAPI):
                 )
             await asyncio.sleep(3600)
 
+    async def engagement_expiry_worker():
+        while True:
+            try:
+                async with AsyncSessionLocal.begin() as db:
+                    await db.run_sync(
+                        lambda sync_db: __import__(
+                            "app.services.engagements",
+                            fromlist=["expire_stale_engagements"],
+                        ).expire_stale_engagements(sync_db)
+                    )
+            except Exception:
+                logging.getLogger("tamp.engagements").exception(
+                    "Engagement expiry worker failed"
+                )
+            await asyncio.sleep(60)
+
     recurring_task = asyncio.create_task(recurring_worker())
     compliance_notification_task = asyncio.create_task(compliance_notification_worker())
+    engagement_expiry_task = asyncio.create_task(engagement_expiry_worker())
     try:
         yield
     finally:
         recurring_task.cancel()
         compliance_notification_task.cancel()
+        engagement_expiry_task.cancel()
         with suppress(asyncio.CancelledError):
             await recurring_task
         with suppress(asyncio.CancelledError):
             await compliance_notification_task
+        with suppress(asyncio.CancelledError):
+            await engagement_expiry_task
         from app.services.maps import close_provider_client
 
         await close_provider_client()

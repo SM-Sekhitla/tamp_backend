@@ -126,6 +126,23 @@ class Lane(Input):
     destination: str
 
 
+class StoredDocument(Input):
+    id: str | None = Field(default=None, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=300)
+    contentType: str | None = Field(default=None, max_length=150)
+    size: int | None = Field(default=None, ge=1)
+    category: str | None = Field(default=None, max_length=80)
+    status: str | None = Field(default=None, max_length=40)
+    uploadedAt: str | None = Field(default=None, max_length=80)
+    uploadedBy: str | None = Field(default=None, max_length=100)
+    expiresAt: str | None = Field(default=None, max_length=80)
+    reviewStatus: str | None = Field(default=None, max_length=40)
+    reviewReason: str | None = Field(default=None, max_length=2000)
+    reviewedAt: str | None = Field(default=None, max_length=80)
+    reviewedBy: str | None = Field(default=None, max_length=100)
+
+
 class Truck(Input):
     id: str = Field(min_length=1, max_length=80)
     transporterId: str
@@ -150,6 +167,9 @@ class Truck(Input):
     year: int | None = Field(default=None, ge=1950, le=2100)
     photos: list[str] = Field(default_factory=list, max_length=20)
     documents: list[str] = Field(default_factory=list, max_length=20)
+    documentMetadata: list[StoredDocument] = Field(default_factory=list, max_length=20)
+    vehicleVerification: Literal["UNVERIFIED", "PENDING", "VERIFIED", "REJECTED"] | None = None
+    vehicleVerificationUpdatedAt: str | None = Field(default=None, max_length=80)
 
     @model_validator(mode="after")
     def dates(self):
@@ -316,6 +336,7 @@ class ConversationId(Input):
 
 class MessageSend(ConversationId):
     text: str = Field(default="", max_length=4000)
+    clientMessageId: str | None = Field(default=None, min_length=8, max_length=100)
     attachmentUrl: str | None = Field(default=None, max_length=300)
     attachmentName: str | None = Field(default=None, max_length=200)
 

@@ -12,6 +12,8 @@ from app.core.security import iso, new_id, now
 from app.db.models import Party, VehiclePosition
 from app.services.domain import audit, lock_domain, organisation_user_ids
 from app.services.maps import verify_route_token
+from app.services.lifecycle import require_transition
+from app.services.engagements import expire_stale_engagements
 from app.services.matching import dt, matching_config, score
 from app.services.records import needed, put, rows
 
@@ -230,6 +232,7 @@ def notify(db, party_id, subject, title):
 def handle(action, data, db, request, response, party):
     d = data.model_dump(mode="json", exclude_none=True)
     lock_domain(db)
+    expire_stale_engagements(db)
     load = needed(db, "loads", d["loadId"], True).data
     candidates = [
         r.data
@@ -244,6 +247,9 @@ def handle(action, data, db, request, response, party):
     # offer Review and then fail merely because a background refresh has not run.
     if action == "prepareOffer" and not candidates and d.get("truckId"):
         truck = needed(db, "trucks", d["truckId"], True).data
+        from app.services.fleet import with_vehicle_verification
+
+        truck = with_vehicle_verification(db, truck)
         organisation_users = organisation_user_ids(db, party)
         require(
             load["ownerId"] in organisation_users
@@ -289,6 +295,9 @@ def handle(action, data, db, request, response, party):
     require(bool(candidates), "No actionable match found", 404)
     match = candidates[0]
     truck = needed(db, "trucks", match["truckPostingId"], True).data
+    from app.services.fleet import with_vehicle_verification
+
+    truck = with_vehicle_verification(db, truck)
     if action == "prepareOffer":
         return prepare_offer(db, party, load, truck, match, data)
     if action == "requestJob":
@@ -315,6 +324,7 @@ def handle(action, data, db, request, response, party):
             409,
         )
         offer = accepted_offer(db, data, load, truck, match)
+        require_transition("match", match["status"], "OFFERED")
         requested = {
             **match,
             "status": "OFFERED",
@@ -401,6 +411,8 @@ def handle(action, data, db, request, response, party):
         if action == "cancelTrip":
             before_pickup = trip["status"] in ["SCHEDULED", "EN_ROUTE_PICKUP", "AT_PICKUP"]
             carrier_side = carrier or assigned
+            require_transition("trip", trip["status"], "CANCELLED")
+            require_transition("match", match["status"], "WITHDRAWN")
             put(
                 db,
                 "trips",
@@ -477,6 +489,7 @@ def handle(action, data, db, request, response, party):
         )
         stops = load_stops(load)
         status, stop_index = next_trip_step(trip, stops)
+        require_transition("trip", trip["status"], status)
         current_stop = stops[stop_index]
         zone = "PICKUP" if current_stop["kind"] == "PICKUP" else "DESTINATION"
         geofence = trip.get("geofences", {}).get("CURRENT_STOP") or trip.get("geofences", {}).get(zone, {})
@@ -645,9 +658,12 @@ def handle(action, data, db, request, response, party):
     else:
         require(not offer.get("ownerAcceptedAt"), "Owner already accepted this offer", 409)
     final = action == "confirmMatch"
+    target_match_status = "CONFIRMED" if final else "ACCEPTED"
+    require_transition("match", match["status"], target_match_status)
+    require_transition("load", load["status"], "CONFIRMED" if final else "MATCHED")
     match = {
         **match,
-        "status": "CONFIRMED" if final else "ACCEPTED",
+        "status": target_match_status,
         "agreedRate": load["targetRate"],
         "activeOfferId": offer["id"],
         "offerRevision": offer["revision"],

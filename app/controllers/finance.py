@@ -2,11 +2,20 @@ from app.api.deps import is_admin
 from app.core.errors import require
 from app.core.security import iso, new_id
 from app.services.domain import audit, lock_domain
-from app.services.records import needed, put
+from app.services.records import needed, put, rows
 
 
 def _notify(db, party_id, invoice, title):
-    put(db, "notifications", {"id": new_id("NT"), "title": title, "detail": invoice["invoiceNumber"], "at": iso(), "unread": True, "tone": "info", "subjectType": "INVOICE", "subjectId": invoice["id"]}, party_id)
+    from app.services.notifications import notify_user
+
+    notify_user(
+        db,
+        party_id,
+        title=title,
+        detail=invoice["invoiceNumber"],
+        subject_type="INVOICE",
+        subject_id=invoice["id"],
+    )
 
 
 def handle(action, data, db, request, response, party):
@@ -25,6 +34,12 @@ def handle(action, data, db, request, response, party):
         title = "Payment recorded"
     elif operation == "RELEASE_PAYOUT":
         require(invoice["status"] == "PAID" and invoice["payoutStatus"] == "PENDING", "Invoice must be paid before payout", 409)
+        unresolved = any(
+            dispute.data["tripId"] == invoice["tripId"]
+            and dispute.data["status"] in {"OPEN", "UNDER_REVIEW"}
+            for dispute in rows(db, "disputes")
+        )
+        require(not unresolved, "Resolve the trip dispute before releasing payout", 409)
         invoice = {**invoice, "status": "SETTLED", "payoutStatus": "PAID", "paidOutAt": iso(), "payoutReference": reference}
         kind, amount, recipient = "PAYOUT", invoice["carrierPayout"], invoice["carrierId"]
         title = "Carrier payout released"

@@ -389,6 +389,8 @@ PROCEDURE_PERMISSIONS = {
     "parties.findDriver": "dispatch.manage",
     "users.list": "users.read",
     "users.setVerification": "users.verify",
+    "documents.review": "users.verify",
+    "documents.list": "users.verify",
     "users.findDriver": "dispatch.manage",
     "loads.list": "loads.read",
     "loads.create": "loads.manage",

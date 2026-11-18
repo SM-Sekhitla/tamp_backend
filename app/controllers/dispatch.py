@@ -5,6 +5,7 @@ from app.core.errors import require
 from app.core.security import iso, new_id
 from app.db.models import OrganisationMembership
 from app.services.domain import audit, lock_domain
+from app.services.lifecycle import require_transition
 from app.services.rbac import require_permission
 from app.services.records import needed, put, rows
 
@@ -22,6 +23,9 @@ def handle(action, data, db, request, response, party):
     match = needed(db, "matches", trip["matchId"]).data
     truck_row = needed(db, "trucks", match["truckPostingId"], True)
     truck = truck_row.data
+    from app.services.fleet import with_vehicle_verification
+
+    truck = with_vehicle_verification(db, truck)
     load = needed(db, "loads", match["loadId"]).data
     active = [
         r.data
@@ -74,7 +78,16 @@ def handle(action, data, db, request, response, party):
             "Select a driver from this truck organisation",
             400,
         )
+        from app.services.driver_compliance import require_dispatch_compliance
+
+        require_dispatch_compliance(db, driver, organisation_id)
+        require(
+            truck.get("vehicleVerification") in (None, "VERIFIED"),
+            "This vehicle must pass compliance review before dispatch",
+            409,
+        )
         if current:
+            require_transition("dispatch", current["status"], "CANCELLED")
             put(db, "dispatches", {**current, "status": "CANCELLED", "cancelledAt": iso(), "cancelledById": party.id})
         status = "ACCEPTED" if owner_driver else "OFFERED"
         now = iso()
@@ -98,6 +111,7 @@ def handle(action, data, db, request, response, party):
                     400,
                 )
             status = "ACCEPTED" if operation == "ACCEPT" else "DECLINED"
+            require_transition("dispatch", current["status"], status)
             dispatch = {**current, "status": status, "respondedAt": iso(), "timeline": [*current.get("timeline", []), {"status": status, "at": iso(), "byUserId": party.id, "note": values.get("note")} ]}
             put(db, "dispatches", dispatch)
             put(db, "trips", {**trip, "dispatchStatus": "ASSIGNED" if status == "ACCEPTED" else "NEEDS_DRIVER", "assignedDriverId": party.id if status == "ACCEPTED" else None})
@@ -124,6 +138,7 @@ def handle(action, data, db, request, response, party):
                 )
             )
             require(manager_membership is not None, "Only this truck organisation may cancel dispatch", 403)
+            require_transition("dispatch", current["status"], "CANCELLED")
             dispatch = {**current, "status": "CANCELLED", "cancelledAt": iso(), "cancelledById": party.id, "timeline": [*current.get("timeline", []), {"status": "CANCELLED", "at": iso(), "byUserId": party.id, "note": values.get("note")} ]}
             put(db, "dispatches", dispatch)
             updated_truck = {**truck, "driverId": None}

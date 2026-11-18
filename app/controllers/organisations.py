@@ -226,6 +226,7 @@ def handle(action, data, db, request, response, party):
             "onboardingUserType": "DRIVER",
             "managedByOrganisationId": organisation.id,
             "temporaryPassword": True,
+            "requiresDriverCompliance": True,
         }
         user = User(
             id=ident,

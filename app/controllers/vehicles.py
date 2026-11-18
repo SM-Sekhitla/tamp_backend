@@ -15,6 +15,16 @@ def handle(action, data, db, request, response, party):
     truck_row = get(db, "trucks", values["truckId"], True)
     require(truck_row is not None, "Truck not found", 404)
     truck = dict(truck_row.data)
+    if values["status"] == "VERIFIED":
+        documents = truck.get("documents", [])
+        reviews = truck.get("documentReviews", {})
+        require(len(documents) >= 3, "Three vehicle documents are required", 409)
+        require(
+            all(reviews.get(url, {}).get("reviewStatus") == "APPROVED" for url in documents),
+            "Approve every vehicle document before verifying this truck",
+            409,
+        )
+        require(bool(truck.get("photos")), "At least one vehicle photo is required", 409)
     if not truck.get("vehicleId") or not get(db, "vehicles", truck.get("vehicleId"), True):
         sync_vehicle_for_truck(db, party, truck, truck_row.data)
         put(db, "trucks", truck, truck_row.owner_id)
@@ -27,4 +37,14 @@ def handle(action, data, db, request, response, party):
         "verificationUpdatedBy": party.id,
     }
     put(db, "vehicles", updated, row.owner_id)
+    put(
+        db,
+        "trucks",
+        {
+            **truck,
+            "vehicleVerification": values["status"],
+            "vehicleVerificationUpdatedAt": updated["verificationUpdatedAt"],
+        },
+        truck_row.owner_id,
+    )
     return updated

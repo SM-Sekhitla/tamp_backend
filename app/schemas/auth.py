@@ -69,15 +69,33 @@ class Register(Login):
 
 
 class RegistrationDocument(Input):
+    id: str | None = Field(default=None, max_length=100)
     label: str = Field(min_length=1, max_length=200)
     name: str = Field(min_length=1, max_length=200)
     url: str = Field(min_length=1, max_length=300)
     contentType: str | None = Field(default=None, max_length=150)
     size: int | None = Field(default=None, ge=1)
+    category: str | None = Field(default=None, max_length=80)
+    status: str | None = Field(default=None, max_length=40)
+    uploadedAt: str | None = Field(default=None, max_length=80)
+    uploadedBy: str | None = Field(default=None, max_length=100)
+    expiresAt: str | None = Field(default=None, max_length=80)
+    reviewStatus: str | None = Field(default=None, max_length=40)
+    reviewReason: str | None = Field(default=None, max_length=2000)
+    reviewedAt: str | None = Field(default=None, max_length=80)
+    reviewedBy: str | None = Field(default=None, max_length=100)
 
 
 class RegistrationDocuments(Input):
     documents: list[RegistrationDocument] = Field(min_length=1, max_length=20)
+
+
+class DocumentReview(Input):
+    subjectType: Literal["REGISTRATION", "TRUCK", "DRIVER"]
+    subjectId: str = Field(min_length=1, max_length=100)
+    documentId: str = Field(min_length=1, max_length=300)
+    status: Literal["APPROVED", "REJECTED"]
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class PasswordChange(Input):

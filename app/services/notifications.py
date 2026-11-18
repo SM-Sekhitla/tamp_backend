@@ -6,6 +6,36 @@ from app.core.security import iso, new_id
 from app.db.models import MODELS, OrganisationMembership, UserRole
 
 
+def notify_user(db, user_id, *, title, detail, subject_type, subject_id, tone="info", organisation_id=None):
+    """Create a private notification in the recipient's tenant, not the actor's."""
+    if organisation_id is None:
+        from app.db.models import User
+        from app.services.rbac import primary_organisation_id
+
+        user = db.get(User, user_id)
+        organisation_id = primary_organisation_id(db, user) if user else None
+    ident = new_id("NT")
+    db.add(
+        MODELS["notifications"](
+            id=ident,
+            owner_id=user_id,
+            organisation_id=organisation_id,
+            data={
+                "id": ident,
+                "title": title,
+                "detail": detail,
+                "at": iso(),
+                "unread": True,
+                "tone": tone,
+                "subjectType": subject_type,
+                "subjectId": subject_id,
+            },
+        )
+    )
+    db.flush()
+    return ident
+
+
 def notify_organisation(
     db,
     organisation_id,
