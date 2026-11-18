@@ -73,6 +73,22 @@ def _normalise_place(value):
     return " ".join(str(value or "").casefold().replace(",", " ").split())
 
 
+def _lane_place_matches(saved_label, actual_place, saved_place=None):
+    """Match a saved city/area against a more specific street address."""
+    saved = _normalise_place(saved_label)
+    actual = _normalise_place(actual_place.get("label"))
+    if saved and actual and (saved == actual or saved in actual or actual in saved):
+        return True
+    if saved_place:
+        saved_province = _normalise_place(saved_place.get("province"))
+        actual_province = _normalise_place(actual_place.get("province"))
+        if saved_province and saved_province == actual_province:
+            # A selected preferred point represents its surrounding operating
+            # area, not only an exact street string.
+            return distance(saved_place, actual_place) <= 50
+    return False
+
+
 def _capacity_score(utilisation):
     """Reward useful capacity without a discontinuity at a full truck."""
     if utilisation <= 0.8:
@@ -120,11 +136,19 @@ def score(load, truck, operator, owner, config=None):
         ),
     ]
     utilisation = load["weightKg"] / truck["payloadCapacityKg"]
+    preferred_lanes = truck.get("preferredLanes", [])
     lane = any(
-        _normalise_place(item["origin"]) == _normalise_place(load["origin"]["label"])
-        and _normalise_place(item["destination"])
-        == _normalise_place(load["destination"]["label"])
-        for item in truck.get("preferredLanes", [])
+        _lane_place_matches(item["origin"], load["origin"], item.get("originPlace"))
+        and _lane_place_matches(
+            item["destination"], load["destination"], item.get("destinationPlace")
+        )
+        for item in preferred_lanes
+    )
+    destination_province_fit = any(
+        _normalise_place((item.get("destinationPlace") or {}).get("province"))
+        == _normalise_place(load["destination"].get("province"))
+        for item in preferred_lanes
+        if (item.get("destinationPlace") or {}).get("province")
     )
     overlap_hours = max(0, (end - start).total_seconds() / 3600)
     values = [
@@ -156,9 +180,9 @@ def score(load, truck, operator, owner, config=None):
             weights["lane"]
             if lane
             else weights["lane"] / 2
-            if truck["currentLocation"]["province"] == load["destination"]["province"]
+            if destination_province_fit
             else 0,
-            "Exact saved lane" if lane else "Destination province fit" if truck["currentLocation"]["province"] == load["destination"]["province"] else "No preferred-lane fit",
+            "Saved lane or operating area" if lane else "Destination province fit" if destination_province_fit else "No preferred-lane fit",
         ),
         (
             "R-RATING",

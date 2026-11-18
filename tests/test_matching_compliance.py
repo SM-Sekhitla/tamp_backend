@@ -34,3 +34,34 @@ def test_pending_vehicle_is_excluded_from_matching():
     approved = _record("VERIFIED")
     assert next(item for item in approved["hardFilterResults"] if item["ruleId"] == "R-VEHICLE-REVIEW")["passed"] is True
 
+
+def test_city_preferred_lane_matches_a_specific_address_in_that_city():
+    result = _record("VERIFIED")
+    result["truck"]["preferredLanes"] = [
+        {
+            "origin": "Pretoria",
+            "destination": "Johannesburg, South Africa",
+        }
+    ]
+    rescored = score(
+        {
+            "cargoType": "GENERAL_PALLETISED",
+            "weightKg": 10_000,
+            "origin": {"label": "Pretoria", "lat": -25.7479, "lng": 28.2293},
+            "destination": {
+                "label": "44 Main Street, Johannesburg, South Africa",
+                "lat": -26.2041,
+                "lng": 28.0473,
+            },
+            "pickupWindow": {
+                "from": "2030-01-01T08:00:00+00:00",
+                "to": "2030-01-01T14:00:00+00:00",
+            },
+        },
+        result["truck"],
+        result["operator"],
+        result["operator"],
+    )
+    lane = next(item for item in rescored["breakdown"] if item["ruleId"] == "R-LANE")
+    assert lane["earned"] == lane["weight"]
+

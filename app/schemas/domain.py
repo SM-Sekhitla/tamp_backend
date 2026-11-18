@@ -167,6 +167,8 @@ class Load(LoadInput):
 class Lane(Input):
     origin: str
     destination: str
+    originPlace: Place | None = None
+    destinationPlace: Place | None = None
 
 
 class StoredDocument(Input):
