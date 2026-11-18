@@ -2,7 +2,7 @@ from sqlalchemy import select
 
 from app.db.models import OrganisationMembership
 
-from .conftest import db_call, login, rpc
+from .conftest import db_call, login, result, rpc
 
 
 def _primary_organisation(user_id):
@@ -49,4 +49,47 @@ def test_driver_documents_cannot_cross_organisation_boundaries(client, accounts)
         f"/api/v1/organisations/{other_organisation_id}/drivers/{accounts['driver']['id']}/documents"
     )
     assert response.status_code == 403
+
+
+def test_freight_workspace_records_are_organisation_scoped(client, accounts):
+    login(client, "owner")
+    customer = result(
+        rpc(
+            client,
+            "freightWorkspace.saveCustomer",
+            {"name": "Owner Customer", "active": True},
+            True,
+        )
+    )
+    assert customer["name"] == "Owner Customer"
+
+    login(client, "other")
+    workspace = result(rpc(client, "freightWorkspace.list"))
+    assert workspace["customers"] == []
+
+    linked_location = rpc(
+        client,
+        "freightWorkspace.saveLocation",
+        {
+            "name": "Cross-tenant location",
+            "customerId": customer["id"],
+            "place": {
+                "label": "1 Main Road, Pretoria",
+                "province": "Gauteng",
+                "lat": -25.746,
+                "lng": 28.188,
+            },
+            "active": True,
+        },
+        True,
+    )
+    assert linked_location.status_code == 404
+
+    archive = rpc(
+        client,
+        "freightWorkspace.delete",
+        {"kind": "CUSTOMER", "id": customer["id"]},
+        True,
+    )
+    assert archive.status_code == 404
 

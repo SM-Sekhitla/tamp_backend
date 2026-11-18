@@ -5,6 +5,7 @@ from app.controllers import (
     commands,
     documents,
     finance,
+    freight_workspace,
     messages,
     operations,
     parties,
@@ -108,6 +109,16 @@ group("snapshot", [("load", a.Empty, False, False), ("sync", d.Delta, True, Fals
 group("loads", [("list", a.Empty, False, False), ("create", d.LoadInput, True, False)])
 group("operations", [("incidentAction", d.IncidentAction, True, False)])
 group("finance", [("invoiceAction", d.InvoiceAction, True, False)])
+group(
+    "freightWorkspace",
+    [
+        ("list", a.Empty, False, False),
+        ("saveCustomer", d.FreightCustomerUpsert, True, False),
+        ("saveLocation", d.SavedLocationUpsert, True, False),
+        ("saveTemplate", d.LoadTemplateUpsert, True, False),
+        ("delete", d.FreightWorkspaceDelete, True, False),
+    ],
+)
 group("dispatch", [("action", d.DispatchAction, True, False)])
 group(
     "messages",
@@ -179,6 +190,7 @@ def dispatch(name, data, db, request, response, party):
         "commands": commands,
         "operations": operations,
         "finance": finance,
+        "freightWorkspace": freight_workspace,
         "messages": messages,
         "dispatch": dispatch_controller,
         "documents": documents,

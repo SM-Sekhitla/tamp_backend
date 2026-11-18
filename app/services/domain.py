@@ -303,6 +303,16 @@ def sanitize_load(db, party, data, old=None):
         )
     else:
         require(data["status"] in ["POSTED", "DRAFT"], "Invalid initial load status", 400)
+    for key, collection in (("customerId", "freightCustomers"), ("templateId", "loadTemplates")):
+        ident = data.get(key)
+        if ident:
+            linked = get(db, collection, ident)
+            require(
+                linked is not None
+                and linked.organisation_id == db.info.get("active_organisation_id"),
+                f"Invalid {key}",
+                400,
+            )
     if not data.get("stops"):
         data["stops"] = [
             {"id": new_id("LS"), "sequence": 0, "kind": "PICKUP", "place": data["origin"], "window": data["pickupWindow"], "cargoWeightKg": data["weightKg"], "status": "PENDING"},

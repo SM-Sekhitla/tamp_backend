@@ -211,6 +211,9 @@ for name in [
     "uploads",
     "webhooks",
     "deliveries",
+    "freightCustomers",
+    "savedLocations",
+    "loadTemplates",
 ]:
     attrs = {
         "__tablename__": name,

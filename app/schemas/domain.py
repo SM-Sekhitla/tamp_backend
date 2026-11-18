@@ -47,6 +47,47 @@ class Money(Input):
     vat: Literal["incl", "excl"]
 
 
+class FreightCustomerUpsert(Input):
+    id: str | None = Field(default=None, max_length=80)
+    name: str = Field(min_length=2, max_length=200)
+    accountCode: str | None = Field(default=None, max_length=80)
+    contactName: str | None = Field(default=None, max_length=200)
+    contactEmail: str | None = Field(default=None, max_length=254)
+    contactPhone: str | None = Field(default=None, max_length=50)
+    billingEmail: str | None = Field(default=None, max_length=254)
+    notes: str | None = Field(default=None, max_length=2000)
+    active: bool = True
+
+
+class SavedLocationUpsert(Input):
+    id: str | None = Field(default=None, max_length=80)
+    customerId: str | None = Field(default=None, max_length=80)
+    name: str = Field(min_length=2, max_length=200)
+    place: Place
+    contactName: str | None = Field(default=None, max_length=200)
+    contactPhone: str | None = Field(default=None, max_length=50)
+    instructions: str | None = Field(default=None, max_length=2000)
+    active: bool = True
+
+
+class LoadTemplateUpsert(Input):
+    id: str | None = Field(default=None, max_length=80)
+    name: str = Field(min_length=2, max_length=200)
+    customerId: str | None = Field(default=None, max_length=80)
+    originLocationId: str | None = Field(default=None, max_length=80)
+    destinationLocationId: str | None = Field(default=None, max_length=80)
+    cargoType: Cargo
+    weightKg: float = Field(gt=0, le=200000, allow_inf_nan=False)
+    volumeM3: float | None = Field(default=None, gt=0, le=10000)
+    specialRequirements: str | None = Field(default=None, max_length=4000)
+    active: bool = True
+
+
+class FreightWorkspaceDelete(Input):
+    kind: Literal["CUSTOMER", "LOCATION", "TEMPLATE"]
+    id: str = Field(min_length=1, max_length=80)
+
+
 class LoadStop(Input):
     id: str = Field(min_length=1, max_length=80)
     sequence: int = Field(ge=0, le=99)
@@ -84,6 +125,8 @@ class LoadRecurrence(Input):
 
 class LoadInput(Input):
     ownerId: str
+    customerId: str | None = Field(default=None, max_length=80)
+    templateId: str | None = Field(default=None, max_length=80)
     cargoType: Cargo
     weightKg: float = Field(gt=0, le=200000, allow_inf_nan=False)
     volumeM3: float | None = Field(default=None, gt=0, le=10000)
