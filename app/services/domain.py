@@ -655,6 +655,8 @@ def refresh_suggestions(db):
     from app.core.security import now
     from app.services.matching import dt
     from app.services.engagements import expire_stale_engagements
+    from app.services.notifications import notify_organisation, notify_user
+    from app.services.rbac import ROLE_IDS
 
     expire_stale_engagements(db)
 
@@ -670,6 +672,11 @@ def refresh_suggestions(db):
         (r.data["loadId"], r.data["truckPostingId"]): r
         for r in rows(db, "matches")
         if r.data["status"] not in ["WITHDRAWN", "EXPIRED"]
+    }
+    owner_match_notifications = {
+        (row.organisation_id, row.owner_id, row.data.get("subjectId"))
+        for row in rows(db, "notifications")
+        if row.data.get("title") == "New truck match"
     }
     for load in loads:
         if load["status"] != "POSTED" or dt(load["pickupWindow"]["to"]) < now():
@@ -698,10 +705,41 @@ def refresh_suggestions(db):
                 createdAt=old.data["createdAt"] if old else iso(),
             )
             put(db, "matches", data, load["ownerId"])
+            load_row = get(db, "loads", load["id"])
+            owner_notification_key = (
+                load_row.organisation_id,
+                load["ownerId"],
+                data["id"],
+            )
+            if owner_notification_key not in owner_match_notifications:
+                owner_detail = (
+                    f"{truck['bodyType'].replace('_', ' ').title()} "
+                    f"{truck['registration']} from "
+                    f"{parties[truck['transporterId']]['companyName']} matches "
+                    f"{load['origin']['label']} to {load['destination']['label']} "
+                    f"at {result['score']:.0f}%."
+                )
+                if load_row.organisation_id:
+                    notify_organisation(
+                        db,
+                        load_row.organisation_id,
+                        title="New truck match",
+                        detail=owner_detail,
+                        subject_type="MATCH",
+                        subject_id=data["id"],
+                        role_ids={ROLE_IDS["FREIGHT_OWNER"], ROLE_IDS["CARGO_OPERATOR"]},
+                    )
+                else:
+                    notify_user(
+                        db,
+                        load["ownerId"],
+                        title="New truck match",
+                        detail=owner_detail,
+                        subject_type="MATCH",
+                        subject_id=data["id"],
+                    )
+                owner_match_notifications.add(owner_notification_key)
             if old is None:
-                from app.services.notifications import notify_organisation
-                from app.services.rbac import ROLE_IDS
-
                 truck_row = get(db, "trucks", truck["id"])
                 notify_organisation(
                     db,
