@@ -70,12 +70,15 @@ def audit(db, party, event, kind, subject, message):
     )
 
 
-def attach_truck_document_metadata(db, truck):
-    upload_by_url = {
-        row.data.get("url"): row.data
-        for row in rows(db, "uploads")
-        if row.owner_id == truck["transporterId"]
-    }
+def attach_truck_document_metadata(db, truck, uploads_by_owner=None):
+    if uploads_by_owner is None:
+        upload_by_url = {
+            row.data.get("url"): row.data
+            for row in rows(db, "uploads")
+            if row.owner_id == truck["transporterId"]
+        }
+    else:
+        upload_by_url = uploads_by_owner.get(truck["transporterId"], {})
     categories = ["VEHICLE_LICENCE", "ROADWORTHY", "INSURANCE"]
     reviews = truck.get("documentReviews", {})
     truck["documentMetadata"] = [
@@ -129,8 +132,13 @@ def attach_truck_document_metadata(db, truck):
 def snapshot(db, party):
     all_rows = {k: [deepcopy(r.data) for r in rows(db, k)] for k in COLLECTIONS}
     if is_admin(party):
+        uploads_by_owner = {}
+        for upload in rows(db, "uploads"):
+            uploads_by_owner.setdefault(upload.owner_id, {})[
+                upload.data.get("url")
+            ] = upload.data
         for truck in all_rows["trucks"]:
-            attach_truck_document_metadata(db, truck)
+            attach_truck_document_metadata(db, truck, uploads_by_owner)
         return {**all_rows, "parties": [party_payload(p) for p in db.scalars(select(Party))]}
     pid = party.id
     organisation_users = organisation_user_ids(db, party)
@@ -643,8 +651,13 @@ def refresh_suggestions(db):
     expire_stale_engagements(db)
 
     parties = {p.id: p.data for p in db.scalars(select(Party))}
-    trucks = [r.data for r in rows(db, "trucks")]
+    from app.services.fleet import with_vehicle_verification
+
+    # Vehicle verification and matching configuration are invariant for this
+    # refresh. Resolve each once instead of inside the load×truck loop.
+    trucks = [with_vehicle_verification(db, r.data) for r in rows(db, "trucks")]
     loads = [r.data for r in rows(db, "loads")]
+    config = matching_config(db)
     existing = {
         (r.data["loadId"], r.data["truckPostingId"]): r
         for r in rows(db, "matches")
@@ -654,10 +667,6 @@ def refresh_suggestions(db):
         if load["status"] != "POSTED" or dt(load["pickupWindow"]["to"]) < now():
             continue
         for truck in trucks:
-            from app.services.fleet import with_vehicle_verification
-
-            truck = with_vehicle_verification(db, truck)
-            config = matching_config(db)
             result = score(load, truck, parties[truck["transporterId"]], parties[load["ownerId"]], config)
             old = existing.get((load["id"], truck["id"]))
             if old and old.data["status"] != "SUGGESTED":

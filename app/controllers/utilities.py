@@ -31,32 +31,50 @@ def handle(procedure, data, db, request, response, party):
         return matching.money(d) if procedure.endswith("quoteMoney") else matching.quote(d)
     if procedure == "matching.score":
         # Preview scores never authorize a command. Use DB identities whenever available.
+        from app.api.deps import is_admin
         from app.services.records import get
+        from app.services.domain import organisation_user_ids
 
         load = get(db, "loads", data.load.id)
         ld = load.data if load else d["load"]
         require(load is not None or ld["ownerId"] == party.id)
         owner = db.get(Party, ld["ownerId"])
         require(owner is not None, "Load owner not found", 404)
-        visible = {r["id"] for r in snapshot(db, party)["loads"]}
-        require(load is None or load.id in visible)
-        visible_trucks = {t["id"] for t in snapshot(db, party)["trucks"]}
+        role = party.data["role"]
+        organisation_users = organisation_user_ids(db, party)
+        if load is not None and not is_admin(party):
+            if role == "FREIGHT_OWNER":
+                require(ld["ownerId"] in organisation_users)
+            else:
+                # Transporters only preview inventory that is publicly posted.
+                require(ld["status"] == "POSTED")
+
+        config = matching.matching_config(db)
+        operators = {}
         result = []
         for proposed in d["trucks"]:
             tr = get(db, "trucks", proposed["id"])
-            require(tr is None or tr.id in visible_trucks)
             truck = tr.data if tr else proposed
             if tr is not None:
                 from app.services.fleet import with_vehicle_verification
 
                 truck = with_vehicle_verification(db, truck)
+                if not is_admin(party):
+                    if role == "FREIGHT_OWNER":
+                        require(truck["status"] == "AVAILABLE")
+                    else:
+                        require(truck["transporterId"] in organisation_users)
             require(tr is not None or truck["transporterId"] == party.id)
-            op = db.get(Party, truck["transporterId"])
+            operator_id = truck["transporterId"]
+            op = operators.get(operator_id)
+            if op is None:
+                op = db.get(Party, operator_id)
+                operators[operator_id] = op
             require(op is not None, "Carrier not found", 404)
             # Never expose private contact fields through score previews.
             public = {**op.data, "email": "", "phone": ""}
             public.pop("kycDocument", None)
-            scored = matching.score(ld, truck, public, owner.data, matching.matching_config(db))
+            scored = matching.score(ld, truck, public, owner.data, config)
             scored["truck"] = {**truck, "registration": "•••" + truck["registration"][-3:]}
             scored["truck"].pop("documents", None)
             result.append(scored)
