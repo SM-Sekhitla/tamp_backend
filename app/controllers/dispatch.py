@@ -101,9 +101,23 @@ def handle(action, data, db, request, response, party):
         if not owner_driver:
             notify(db, driver.id, trip["id"], "New delivery assignment", f"{load['origin']['label']} to {load['destination']['label']}")
     else:
-        require(current is not None, "Active dispatch not found", 404)
         if operation in ["ACCEPT", "DECLINE"]:
-            require(party.id == current["driverId"], "Only the assigned driver may respond", 403)
+            require_permission(db, party, "dispatch.respond")
+            # The browser may still hold the previous dispatch id after a
+            # background refresh. Resolve the latest live offer belonging to
+            # this authenticated driver instead of rejecting a valid response.
+            own_active = [item for item in active if item["driverId"] == party.id]
+            if current is None or current["driverId"] != party.id:
+                current = max(
+                    own_active,
+                    key=lambda item: item["offeredAt"],
+                    default=None,
+                )
+            require(
+                current is not None,
+                "This assignment is no longer available to your account. Refresh My Jobs for the latest assignment.",
+                409,
+            )
             if operation == "DECLINE":
                 require(
                     bool(values.get("note", "").strip()),
@@ -128,6 +142,7 @@ def handle(action, data, db, request, response, party):
                 values.get("note") if status == "DECLINED" else load["id"],
             )
         else:
+            require(current is not None, "Active dispatch not found", 404)
             require_permission(db, party, "dispatch.manage")
             organisation_id = truck_row.organisation_id or db.info.get("active_organisation_id")
             manager_membership = db.scalar(
