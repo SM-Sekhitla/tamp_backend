@@ -363,8 +363,14 @@ def has_permission(db, user, code):
     return "platform.admin" in effective or code in effective
 
 
-def require_permission(db, user, code):
-    if has_permission(db, user, code):
+def require_permission(db, user, code, organisation_id=None):
+    effective_organisation_id = (
+        db.info.get("active_organisation_id")
+        if organisation_id is None
+        else organisation_id
+    )
+    effective = permission_codes(db, user, effective_organisation_id)
+    if "platform.admin" in effective or code in effective:
         return
     if (
         user.data.get("role") not in {"ADMIN", "system_super_user"}

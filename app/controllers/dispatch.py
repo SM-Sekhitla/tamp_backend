@@ -39,10 +39,10 @@ def handle(action, data, db, request, response, party):
         else max(active, key=lambda item: item["offeredAt"], default=None)
     )
     operation = values["action"]
+    organisation_id = truck_row.organisation_id or db.info.get("active_organisation_id")
 
     if operation == "ASSIGN":
-        require_permission(db, party, "dispatch.manage")
-        organisation_id = truck_row.organisation_id or db.info.get("active_organisation_id")
+        require_permission(db, party, "dispatch.manage", organisation_id)
         manager_membership = db.scalar(
             select(OrganisationMembership).where(
                 OrganisationMembership.organisation_id == organisation_id,
@@ -102,7 +102,10 @@ def handle(action, data, db, request, response, party):
             notify(db, driver.id, trip["id"], "New delivery assignment", f"{load['origin']['label']} to {load['destination']['label']}")
     else:
         if operation in ["ACCEPT", "DECLINE"]:
-            require_permission(db, party, "dispatch.respond")
+            # A driver may belong to more than one organisation. Authorise the
+            # response in the fleet organisation that issued this assignment,
+            # not whichever organisation happens to be active in the session.
+            require_permission(db, party, "dispatch.respond", organisation_id)
             # The browser may still hold the previous dispatch id after a
             # background refresh. Resolve the latest live offer belonging to
             # this authenticated driver instead of rejecting a valid response.
@@ -143,8 +146,7 @@ def handle(action, data, db, request, response, party):
             )
         else:
             require(current is not None, "Active dispatch not found", 404)
-            require_permission(db, party, "dispatch.manage")
-            organisation_id = truck_row.organisation_id or db.info.get("active_organisation_id")
+            require_permission(db, party, "dispatch.manage", organisation_id)
             manager_membership = db.scalar(
                 select(OrganisationMembership).where(
                     OrganisationMembership.organisation_id == organisation_id,
