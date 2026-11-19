@@ -54,6 +54,13 @@ def test_driver_document_folder_is_tenant_scoped(client, accounts):
     assert listing.json()[0]["reviewStatus"] == "APPROVED"
 
     login(client, "driver")
+    notices = result(rpc(client, "notifications.list", {"limit": 20}))
+    approval = next(item for item in notices if item["subjectType"] == "DRIVER")
+    assert approval["title"] == "Driving licence approved"
+    assert "licence.pdf" in approval["detail"]
+    assert "driver" in approval["detail"].lower()
+    assert approval["subjectId"] == driver_id
+
     forbidden = client.get(
         f"/api/v1/organisations/{organisation_id}/drivers/{driver_id}/documents"
     )
