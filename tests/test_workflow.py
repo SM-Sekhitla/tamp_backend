@@ -126,6 +126,7 @@ def test_complete_freight_lifecycle(client, accounts):
     trip_id = result(rpc(client, "commands.confirmMatch", {"loadId": load["id"], **proof}, True))["tripId"]
     assert rpc(client, "commands.confirmMatch", {"loadId": load["id"]}, True).status_code == 409
     login(client, "driver")
+    result(rpc(client, "dispatch.action", {"tripId": trip_id, "action": "ACCEPT"}, True))
     assert (
         result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))["status"]
         == "EN_ROUTE_PICKUP"
@@ -248,8 +249,10 @@ def test_driver_dispatch_requires_acceptance(client, accounts):
     result(rpc(client, "commands.acceptMatch", {"loadId": load["id"], "truckId": truck["id"], **proof}, True))
     login(client, "carrier")
     trip_id = result(rpc(client, "commands.confirmMatch", {"loadId": load["id"], **proof}, True))["tripId"]
-    assigned = result(rpc(client, "dispatch.action", {"tripId": trip_id, "action": "ASSIGN", "driverEmail": "driver@example.com", "note": "Collect at gate 2"}, True))
-    assert assigned["dispatch"]["status"] == "OFFERED"
+    dispatches = result(rpc(client, "snapshot.load"))["dispatches"]
+    assert len(dispatches) == 1
+    assert dispatches[0]["driverId"] == accounts["driver"]["id"]
+    assert dispatches[0]["status"] == "OFFERED"
     login(client, "driver")
     assert rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True).status_code == 409
     accepted = result(rpc(client, "dispatch.action", {"tripId": trip_id, "action": "ACCEPT"}, True))

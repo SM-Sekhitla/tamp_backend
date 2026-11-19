@@ -7,9 +7,9 @@ from sqlalchemy import select
 
 from app.core.client_ip import client_ip
 from app.core.config import settings
-from app.core.errors import require
+from app.core.errors import AppError, require
 from app.core.security import iso, new_id, now
-from app.db.models import Party, VehiclePosition
+from app.db.models import OrganisationMembership, Party, VehiclePosition
 from app.services.domain import audit, lock_domain, organisation_user_ids
 from app.services.maps import verify_route_token
 from app.services.lifecycle import require_transition
@@ -704,29 +704,90 @@ def handle(action, data, db, request, response, party):
     )
     if final:
         trip_id = new_id("TP")
-        put(
-            db,
-            "trips",
-            dict(
-                id=trip_id,
-                matchId=match["id"],
-                status="SCHEDULED",
-                events=[dict(status="SCHEDULED", at=iso(), byUserId=party.id)],
-                livePosition=None,
-                simulatedPosition=None,
-                progressPct=0,
-                currentStopIndex=0,
-                currentStopId=load_stops(load)[0]["id"],
-                etaAt=None,
-                geofences={
-                    "PICKUP": {"inside": False},
-                    "DESTINATION": {"inside": False},
-                },
-                geofenceEvents=[],
-                suggestedAction=None,
-            ),
-            load["ownerId"],
+        assigned_driver = (
+            db.get(Party, truck.get("driverId")) if truck.get("driverId") else None
         )
+        truck_row = needed(db, "trucks", truck["id"])
+        organisation_id = truck_row.organisation_id
+        owner_driver = bool(
+            assigned_driver
+            and assigned_driver.id == truck["transporterId"]
+            and assigned_driver.data["role"] == "TRANSPORTER"
+        )
+        driver_membership = (
+            db.scalar(
+                select(OrganisationMembership).where(
+                    OrganisationMembership.organisation_id == organisation_id,
+                    OrganisationMembership.user_id == assigned_driver.id,
+                    OrganisationMembership.status == "ACTIVE",
+                )
+            )
+            if assigned_driver and organisation_id
+            else None
+        )
+        driver_ready = bool(
+            assigned_driver
+            and assigned_driver.data.get("verification") == "VERIFIED"
+            and (assigned_driver.data.get("role") == "DRIVER" or owner_driver)
+            and (owner_driver or driver_membership is not None)
+        )
+        if driver_ready:
+            from app.services.driver_compliance import require_dispatch_compliance
+
+            try:
+                require_dispatch_compliance(db, assigned_driver, organisation_id)
+            except AppError:
+                driver_ready = False
+
+        dispatch_status = (
+            "ASSIGNED" if driver_ready and owner_driver else
+            "AWAITING_DRIVER" if driver_ready else
+            "NEEDS_DRIVER"
+        )
+        trip = dict(
+            id=trip_id,
+            matchId=match["id"],
+            status="SCHEDULED",
+            dispatchStatus=dispatch_status,
+            assignedDriverId=assigned_driver.id if driver_ready else None,
+            events=[dict(status="SCHEDULED", at=iso(), byUserId=party.id)],
+            livePosition=None,
+            simulatedPosition=None,
+            progressPct=0,
+            currentStopIndex=0,
+            currentStopId=load_stops(load)[0]["id"],
+            etaAt=None,
+            geofences={
+                "PICKUP": {"inside": False},
+                "DESTINATION": {"inside": False},
+            },
+            geofenceEvents=[],
+            suggestedAction=None,
+        )
+        put(db, "trips", trip, load["ownerId"])
+        if driver_ready:
+            assigned_at = iso()
+            status = "ACCEPTED" if owner_driver else "OFFERED"
+            dispatch = {
+                "id": new_id("DP"),
+                "tripId": trip_id,
+                "loadId": load["id"],
+                "truckId": truck["id"],
+                "carrierId": truck["transporterId"],
+                "driverId": assigned_driver.id,
+                "status": status,
+                "offeredAt": assigned_at,
+                "respondedAt": assigned_at if owner_driver else None,
+                "note": "Automatically assigned from the selected truck",
+                "timeline": [{"status": status, "at": assigned_at, "byUserId": party.id}],
+            }
+            put(db, "dispatches", dispatch, truck["transporterId"])
+            notify(
+                db,
+                assigned_driver.id,
+                load["id"],
+                "Job ready" if owner_driver else "New delivery assignment",
+            )
         from app.services.messaging import ensure_conversation, system_message
 
         conversation = ensure_conversation(db, trip_id, load, truck)

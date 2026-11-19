@@ -77,8 +77,9 @@ def main() -> None:
     print("Applying database migrations...", flush=True)
     run_command([str(python_executable), "-m", "alembic", "upgrade", "head"])
 
+    host = environment_value("BACKEND_HOST", "0.0.0.0")
     port = environment_value("BACKEND_PORT", "5000")
-    print(f"Starting FastAPI server at http://127.0.0.1:{port}...", flush=True)
+    print(f"Starting FastAPI server at http://{host}:{port}...", flush=True)
     run_command(
         [
             str(python_executable),
@@ -86,7 +87,7 @@ def main() -> None:
             "uvicorn",
             "app.main:app",
             "--host",
-            "127.0.0.1",
+            host,
             "--port",
             port,
             "--reload",

@@ -395,6 +395,28 @@ def sync(db, party, delta):
                 from app.services.rbac import require_permission
 
                 require_permission(db, party, "trucks.manage")
+                transporter = db.get(Party, data["transporterId"])
+                owner_operator = bool(
+                    transporter
+                    and (
+                        transporter.data.get("ownerOperator")
+                        or (transporter.onboarding or {}).get("driver", {}).get("workType")
+                        == "OWNER"
+                    )
+                )
+                if owner_operator:
+                    existing_owner_trucks = [
+                        item.data
+                        for item in rows(db, "trucks")
+                        if item.data["transporterId"] == transporter.id
+                        and (old is None or item.data["id"] != old["id"])
+                    ]
+                    require(
+                        old is not None or not existing_owner_trucks,
+                        "Owner-operators can register one truck only",
+                        409,
+                    )
+                    data["driverId"] = transporter.id
                 require(
                     bool(data.get("licenceNumber", "").strip())
                     and bool(data.get("licenceExpiry")),

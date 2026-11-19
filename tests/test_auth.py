@@ -1,7 +1,7 @@
 import pytest
 
 from app.core.security import token_hash
-from app.db.models import Party, Session
+from app.db.models import MODELS, Party, Session
 
 from .conftest import db_call, login, result, rpc
 
@@ -40,6 +40,49 @@ def test_registration_verification_login_and_revocation(client):
     assert result(rpc(client, "auth.me"))["id"] == ident
     result(rpc(client, "auth.logout", {}, True))
     assert result(rpc(client, "auth.me")) is None
+
+
+def test_owner_operator_registration_creates_and_assigns_single_truck(client):
+    code = result(rpc(client, "email.sendCode", {"email": "operator@example.com"}, True))["devCode"]
+    ident = result(
+        rpc(
+            client,
+            "parties.register",
+            {
+                "email": "operator@example.com",
+                "password": "Strong-password-123",
+                "code": code,
+                "userType": "DRIVER",
+                "firstName": "Owner",
+                "lastName": "Operator",
+                "phone": "0821234567",
+                "province": "GP",
+                "driver": {
+                    "vehicleClasses": ["HEAVY"],
+                    "licenceCode": "EC",
+                    "prdp": True,
+                    "workType": "OWNER",
+                    "truck": {
+                        "registration": "aa 11 bb gp",
+                        "bodyType": "TAUTLINER",
+                        "capacityT": 30,
+                    },
+                },
+            },
+            True,
+        )
+    )["id"]
+
+    def verify_database(db):
+        user = db.get(Party, ident)
+        truck = db.get(MODELS["trucks"], user.data["ownerOperatorTruckId"])
+        assert user.data["ownerOperator"] is True
+        assert truck.data["registration"] == "AA 11 BB GP"
+        assert truck.data["transporterId"] == ident
+        assert truck.data["driverId"] == ident
+        assert truck.data["status"] == "OFFLINE"
+
+    db_call(verify_database)
 
 
 def test_csrf_roles_methods_and_input_validation(client, accounts):

@@ -36,6 +36,8 @@ def is_admin(party):
 
 def party_payload(party, db=None):
     data = dict(party.data)
+    if (party.onboarding or {}).get("driver", {}).get("workType") == "OWNER":
+        data["ownerOperator"] = True
     if data.get("role") == "system_super_user":
         data["role"] = "ADMIN"
         data["systemRole"] = "system_super_user"
