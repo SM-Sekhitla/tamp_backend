@@ -620,19 +620,29 @@ def handle(action, data, db, request, response, party):
         return {"ok": True, "status": status, "progressPct": progress}
     require(party.data["verification"] == "VERIFIED", "Account verification is required", 403)
     organisation_users = organisation_user_ids(db, party)
+    trucks_required = max(1, int(load.get("trucksRequired") or 1))
+    load_matches = [m.data for m in rows(db, "matches") if m.data["loadId"] == load["id"]]
+    selected_matches = [
+        item for item in load_matches if item["status"] in ["ACCEPTED", "CONFIRMED"]
+    ]
     if action == "confirmMatch":
         require(
             truck["transporterId"] in organisation_users,
             "Only this carrier organisation may confirm",
         )
         require(
-            match["status"] == "ACCEPTED" and load["status"] == "MATCHED",
+            match["status"] == "ACCEPTED" and load["status"] in ["MATCHED", "CONFIRMED"],
             "Owner acceptance required",
             409,
         )
     else:
         require(load["ownerId"] in organisation_users, "Only the freight owner organisation may accept")
-        require(load["status"] == "POSTED", "Load is no longer available", 409)
+        require(load["status"] in ["POSTED", "MATCHED"], "Load is no longer available", 409)
+        require(
+            len(selected_matches) < trucks_required,
+            "The required number of trucks has already been selected",
+            409,
+        )
         require(
             match["status"]
             in (["OFFERED"] if action == "acceptRequest" else ["SUGGESTED", "OFFERED"]),
@@ -673,7 +683,14 @@ def handle(action, data, db, request, response, party):
     final = action == "confirmMatch"
     target_match_status = "CONFIRMED" if final else "ACCEPTED"
     require_transition("match", match["status"], target_match_status)
-    require_transition("load", load["status"], "CONFIRMED" if final else "MATCHED")
+    selected_after = len(selected_matches) + (0 if final else 1)
+    confirmed_before = sum(item["status"] == "CONFIRMED" for item in load_matches)
+    confirmed_after = confirmed_before + (1 if final else 0)
+    target_load_status = (
+        "CONFIRMED" if final and confirmed_after >= trucks_required else "MATCHED"
+    )
+    if load["status"] != target_load_status:
+        require_transition("load", load["status"], target_load_status)
     match = {
         **match,
         "status": target_match_status,
@@ -692,15 +709,18 @@ def handle(action, data, db, request, response, party):
     }
     put(db, "match_offers", offer)
     receipt(db, party, match, offer, request)
-    put(db, "loads", {**load, "status": "CONFIRMED" if final else "MATCHED"})
+    put(db, "loads", {**load, "status": target_load_status})
     put(db, "trucks", {**truck, "status": "RESERVED"})
-    for r in rows(db, "matches"):
-        if (
-            r.id != match["id"]
-            and r.data["loadId"] == load["id"]
-            and r.data["status"] in ["SUGGESTED", "OFFERED"]
-        ):
-            r.data = {**r.data, "status": "WITHDRAWN"}
+    # A fleet requirement stays open while trucks are being selected. Only
+    # withdraw the unused candidates once every required slot has been filled.
+    if not final and selected_after >= trucks_required:
+        for r in rows(db, "matches"):
+            if (
+                r.id != match["id"]
+                and r.data["loadId"] == load["id"]
+                and r.data["status"] in ["SUGGESTED", "OFFERED"]
+            ):
+                r.data = {**r.data, "status": "WITHDRAWN"}
     audit(
         db,
         party,
