@@ -332,7 +332,11 @@ def sanitize_load(db, party, data, old=None):
     data["deliveryBy"] = data["stops"][-1]["window"]["to"]
     data["distanceKm"] = round(sum(distance(a["place"], b["place"]) for a, b in zip(data["stops"], data["stops"][1:])), 1)
     data["requiredBodyTypes"] = BODIES[data["cargoType"]]
-    data["targetRate"] = money(data)
+    platform_quote = money(data)
+    data["platformQuote"] = platform_quote
+    data["targetRate"] = (
+        data["offeredRate"] if data.get("pricingMode") == "CUSTOM" else platform_quote
+    )
     data["createdAt"] = iso() if not old or old["status"] == "EXPIRED" else old["createdAt"]
     data["reference"] = data["id"]
     return data

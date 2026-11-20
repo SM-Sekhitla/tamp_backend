@@ -130,6 +130,10 @@ class LoadInput(Input):
     cargoType: Cargo
     weightKg: float = Field(gt=0, le=200000, allow_inf_nan=False)
     volumeM3: float | None = Field(default=None, gt=0, le=10000)
+    trucksRequired: int = Field(default=1, ge=1, le=200)
+    pricingMode: Literal["PLATFORM", "CUSTOM"] = "PLATFORM"
+    rateBasis: Literal["PER_TRIP", "PER_TRUCK", "PER_TONNE", "PER_KM"] = "PER_TRIP"
+    offeredRate: Money | None = None
     origin: Place
     destination: Place
     distanceKm: float = Field(ge=0, le=30000, allow_inf_nan=False)
@@ -141,6 +145,12 @@ class LoadInput(Input):
 
     @model_validator(mode="after")
     def dates(self):
+        if self.pricingMode == "CUSTOM" and (
+            self.offeredRate is None or self.offeredRate.amount <= 0
+        ):
+            raise ValueError("Enter a positive offered rate when using custom pricing")
+        if self.pricingMode == "PLATFORM" and self.offeredRate is not None:
+            raise ValueError("A custom offered rate is only valid with custom pricing")
         if self.deliveryBy.tzinfo is None or self.deliveryBy < self.pickupWindow.from_:
             raise ValueError("Delivery must follow pickup and include a timezone")
         if self.stops:
@@ -161,6 +171,7 @@ class Load(LoadInput):
     ]
     createdAt: datetime
     requiredBodyTypes: list[Body]
+    platformQuote: Money | None = None
     targetRate: Money | None = None
 
 

@@ -117,6 +117,10 @@ def prepare_offer(client, load, truck):
 
 def test_complete_freight_lifecycle(client, accounts):
     load, truck, match = setup_match(client, accounts)
+    saved_load = result(rpc(client, "snapshot.load"))["loads"][0]
+    assert saved_load["trucksRequired"] == 1
+    assert saved_load["pricingMode"] == "PLATFORM"
+    assert saved_load["platformQuote"] == saved_load["targetRate"]
     proof = prepare_offer(client, load, truck)
     result(
         rpc(client, "commands.acceptMatch", {"loadId": load["id"], "truckId": truck["id"], **proof}, True)
