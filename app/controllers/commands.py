@@ -342,6 +342,147 @@ def handle(action, data, db, request, response, party):
         notify(db, load["ownerId"], load["id"], "New carrier job request")
         return {"ok": True, "matchId": match["id"]}
     if action in ["reportIncident", "cancelTrip"]:
+        owner = load["ownerId"] in organisation_user_ids(db, party)
+        # Cancelling a shipment from the freight-owner side is a load-level
+        # operation. A fleet requirement can have several confirmed matches,
+        # trips and dispatch assignments; cancelling only the first one leaves
+        # the other vehicles incorrectly reserved.
+        if action == "cancelTrip" and owner and not d.get("truckId"):
+            description = d["reason"].strip()
+            require(description, "A cancellation reason is required", 400)
+            cancelled_incident_ids = []
+            affected_parties = set()
+            affected = False
+            for match_row in rows(db, "matches"):
+                related_match = match_row.data
+                if (
+                    related_match["loadId"] != load["id"]
+                    or related_match["status"] not in ["ACCEPTED", "CONFIRMED"]
+                ):
+                    continue
+                related_truck_row = needed(
+                    db, "trucks", related_match["truckPostingId"], True
+                )
+                related_truck = related_truck_row.data
+                related_trip_row = next(
+                    (
+                        row
+                        for row in rows(db, "trips")
+                        if row.data["matchId"] == related_match["id"]
+                    ),
+                    None,
+                )
+                before_pickup = True
+                if related_trip_row and related_trip_row.data["status"] not in [
+                    "DELIVERED",
+                    "COMPLETED",
+                    "CANCELLED",
+                ]:
+                    related_trip = related_trip_row.data
+                    before_pickup = related_trip["status"] in [
+                        "SCHEDULED",
+                        "EN_ROUTE_PICKUP",
+                        "AT_PICKUP",
+                    ]
+                    incident = dict(
+                        id=new_id("IN"),
+                        tripId=related_trip["id"],
+                        loadId=load["id"],
+                        truckId=related_truck["id"],
+                        kind="CANCELLATION",
+                        description=description,
+                        status="OPEN",
+                        delayMinutes=None,
+                        reportedById=party.id,
+                        reportedByRole=party.data["role"],
+                        reportedAt=iso(),
+                        location=None,
+                    )
+                    put(db, "incidents", incident, party.id)
+                    cancelled_incident_ids.append(incident["id"])
+                    require_transition("trip", related_trip["status"], "CANCELLED")
+                    put(
+                        db,
+                        "trips",
+                        {
+                            **related_trip,
+                            "status": "CANCELLED",
+                            "operationalStatus": "CANCELLED",
+                            "activeIncidentIds": [
+                                *related_trip.get("activeIncidentIds", []),
+                                incident["id"],
+                            ],
+                            "events": [
+                                *related_trip["events"],
+                                {
+                                    "status": "CANCELLED",
+                                    "at": iso(),
+                                    "byUserId": party.id,
+                                    "reason": description,
+                                },
+                            ],
+                        },
+                    )
+                    for dispatch_row in rows(db, "dispatches"):
+                        dispatch = dispatch_row.data
+                        if (
+                            dispatch["tripId"] == related_trip["id"]
+                            and dispatch["status"] in ["OFFERED", "ACCEPTED"]
+                        ):
+                            require_transition("dispatch", dispatch["status"], "CANCELLED")
+                            put(
+                                db,
+                                "dispatches",
+                                {
+                                    **dispatch,
+                                    "status": "CANCELLED",
+                                    "respondedAt": iso(),
+                                    "timeline": [
+                                        *dispatch.get("timeline", []),
+                                        {
+                                            "status": "CANCELLED",
+                                            "at": iso(),
+                                            "byUserId": party.id,
+                                            "reason": description,
+                                        },
+                                    ],
+                                },
+                            )
+                if related_match["status"] in ["ACCEPTED", "CONFIRMED"]:
+                    require_transition("match", related_match["status"], "WITHDRAWN")
+                    put(db, "matches", {**related_match, "status": "WITHDRAWN"})
+                    put(
+                        db,
+                        "trucks",
+                        {
+                            **related_truck,
+                            "status": "AVAILABLE" if before_pickup else "OFFLINE",
+                        },
+                    )
+                    affected = True
+                    affected_parties.add(related_truck["transporterId"])
+                    if related_truck.get("driverId"):
+                        affected_parties.add(related_truck["driverId"])
+            require(affected, "No active shipment assignment was found", 409)
+            if load["status"] != "CANCELLED":
+                require_transition("load", load["status"], "CANCELLED")
+            put(db, "loads", {**load, "status": "CANCELLED"})
+            for party_id in affected_parties - {party.id}:
+                notify(db, party_id, load["id"], "Shipment cancelled")
+            audit(
+                db,
+                party,
+                "LOAD_CANCELLED",
+                "LOAD",
+                load["id"],
+                description,
+            )
+            return {
+                "ok": True,
+                "incidentId": cancelled_incident_ids[0]
+                if cancelled_incident_ids
+                else None,
+            }
         trip = next(
             (r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]),
             None,
@@ -353,7 +494,7 @@ def handle(action, data, db, request, response, party):
             party.data.get("role") == "TRANSPORTER"
             and truck["transporterId"] in organisation_user_ids(db, party)
         )
-        owner = party.id == load["ownerId"]
+        owner = load["ownerId"] in organisation_user_ids(db, party)
         require(
             assigned or carrier or owner,
             "Only a trip party may report an operational issue",
@@ -436,12 +577,22 @@ def handle(action, data, db, request, response, party):
                 },
             )
             put(db, "matches", {**match, "status": "WITHDRAWN"})
+            target_load_status = (
+                "MATCHED" if owner and d.get("truckId") else
+                "POSTED" if carrier_side and before_pickup else "CANCELLED"
+            )
+            if load["status"] != target_load_status:
+                require_transition("load", load["status"], target_load_status)
             put(
                 db,
                 "loads",
-                {**load, "status": "POSTED" if carrier_side and before_pickup else "CANCELLED"},
+                {**load, "status": target_load_status},
             )
             put(db, "trucks", {**truck, "status": "AVAILABLE" if before_pickup else "OFFLINE"})
+            if target_load_status in ["POSTED", "MATCHED"]:
+                from app.services.domain import refresh_suggestions
+
+                refresh_suggestions(db)
             event, title = "TRIP_CANCELLED", "Trip cancelled"
         else:
             op = "DELAYED" if kind in ["DELAY", "ROUTE_OBSTRUCTION"] else "ACTION_REQUIRED"

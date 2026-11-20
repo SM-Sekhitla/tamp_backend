@@ -370,6 +370,7 @@ class IncidentReport(Input):
 
 class TripCancellation(Input):
     loadId: str = Field(max_length=80)
+    truckId: str | None = Field(default=None, max_length=80)
     reason: str = Field(min_length=5, max_length=2000)
 
 

@@ -737,7 +737,19 @@ def refresh_suggestions(db):
         if row.data.get("title") == "New truck match"
     }
     for load in loads:
-        if load["status"] != "POSTED" or dt(load["pickupWindow"]["to"]) < now():
+        selected_count = sum(
+            row.data["loadId"] == load["id"]
+            and row.data["status"] in ["ACCEPTED", "CONFIRMED"]
+            for row in rows(db, "matches")
+        )
+        has_open_fleet_slot = (
+            load["status"] == "MATCHED"
+            and selected_count < max(1, int(load.get("trucksRequired") or 1))
+        )
+        if (
+            load["status"] != "POSTED"
+            and not has_open_fleet_slot
+        ) or dt(load["pickupWindow"]["to"]) < now():
             continue
         scored_inventory = [
             score(
