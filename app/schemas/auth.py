@@ -12,7 +12,9 @@ class Empty(Input):
 
 
 class Email(Input):
-    email: EmailStr
+    # Public authentication flows must support bootstrap identities using
+    # reserved local domains. Registration still uses EmailStr below.
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+$")
 
 
 class Login(Input):

@@ -10,7 +10,16 @@ def require(condition, message="Not permitted", status=403):
 
 def validation_message(exc):
     """Return the first validation issue without echoing submitted values."""
-    errors = exc.errors(include_url=False, include_context=False, include_input=False)
+    try:
+        errors = exc.errors(
+            include_url=False,
+            include_context=False,
+            include_input=False,
+        )
+    except TypeError:
+        # FastAPI's RequestValidationError wrapper does not accept Pydantic's
+        # optional formatting flags in every supported dependency version.
+        errors = exc.errors()
     if not errors:
         return "Invalid request data"
     issue = errors[0]

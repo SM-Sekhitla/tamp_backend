@@ -178,22 +178,24 @@ def test_complete_freight_lifecycle(client, accounts):
         == "AT_DROPOFF"
     )
     assert rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True).status_code == 400
-    assert (
-        result(
-            rpc(
-                client,
-                "commands.advanceTrip",
-                {"loadId": load["id"], "proof": {"recipientName": "Recipient"}},
-                True,
-            )
-        )["status"]
-        == "DELIVERED"
+    delivery = result(
+        rpc(
+            client,
+            "commands.advanceTrip",
+            {"loadId": load["id"], "proof": {"recipientName": "Recipient"}},
+            True,
+        )
     )
-    result(rpc(client, "commands.advanceTrip", {"loadId": load["id"]}, True))
+    assert delivery["status"] == "COMPLETED"
+    assert delivery["progressPct"] == 100
     login(client, "owner")
     snap = result(rpc(client, "snapshot.load"))
     assert snap["loads"][0]["status"] == "COMPLETED"
     assert snap["trips"][0]["id"] == trip_id
+    assert [event["status"] for event in snap["trips"][0]["events"][-2:]] == [
+        "DELIVERED",
+        "COMPLETED",
+    ]
     assert len(snap["acceptances"]) == 2
     assert len(snap["invoices"]) == 1
     invoice = snap["invoices"][0]

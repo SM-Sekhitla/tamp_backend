@@ -553,6 +553,19 @@ def handle(action, data, db, request, response, party):
                 party.id,
             )
             stops[stop_index] = {**current_stop, "status": "COMPLETED", "completedAt": iso(), "proofId": proof_id}
+        # The final delivery proof is the authoritative close-out event. Do not
+        # leave a direct or final-stop trip parked at DELIVERED/90% waiting for
+        # a second, non-operational button press. Preserve both lifecycle
+        # events for the audit timeline, then finish the trip atomically.
+        event_at = iso()
+        transition_events = [{"status": status, "at": event_at, "byUserId": party.id}]
+        if status == "DELIVERED" and stop_index == len(stops) - 1:
+            require_transition("trip", "DELIVERED", "COMPLETED")
+            status = "COMPLETED"
+            transition_events.append(
+                {"status": "COMPLETED", "at": event_at, "byUserId": party.id}
+            )
+
         load = {**load, "stops": stops}
         put(db, "loads", load)
         completed_stops = sum(stop["status"] == "COMPLETED" for stop in stops)
@@ -563,7 +576,7 @@ def handle(action, data, db, request, response, party):
             "currentStopIndex": stop_index,
             "currentStopId": stops[stop_index]["id"],
             "progressPct": progress,
-            "events": [*trip["events"], {"status": status, "at": iso(), "byUserId": party.id}],
+            "events": [*trip["events"], *transition_events],
             "suggestedAction": None,
         }
         put(db, "trips", trip)
