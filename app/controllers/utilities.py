@@ -78,7 +78,21 @@ def handle(procedure, data, db, request, response, party):
             scored["truck"] = {**truck, "registration": "•••" + truck["registration"][-3:]}
             scored["truck"].pop("documents", None)
             result.append(scored)
-        return sorted(result, key=lambda r: -r["score"])
+        fleet = matching.fleet_recommendations(
+            result,
+            ld.get("trucksRequired", 1),
+            config["minimumScore"],
+        )
+        for scored in result:
+            scored.update(fleet["metadata"].get(scored["truck"]["id"], {}))
+        return sorted(
+            result,
+            key=lambda r: (
+                not r.get("selectedForFleetPlan", False),
+                r.get("fleetPlanRank") or 9999,
+                -r["score"],
+            ),
+        )
     if procedure == "loads.list":
         return snapshot(db, party)["loads"]
     if procedure == "loads.create":

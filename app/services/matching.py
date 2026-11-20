@@ -214,3 +214,61 @@ def score(load, truck, operator, owner, config=None):
         ],
         "passed": all(p for _, _, p in tests),
     }
+
+
+def fleet_recommendations(scored, trucks_required, minimum_score=0):
+    """Rank eligible inventory by carrier and build a minimum-carrier plan.
+
+    A carrier that can cover the remaining requirement is preferred. Otherwise
+    the carrier contributing the most eligible trucks is selected, followed by
+    the next largest fleet until the requirement is covered. Match quality and
+    carrier reputation break capacity ties; each carrier's best-scoring trucks
+    are allocated first.
+    """
+    required = max(1, int(trucks_required or 1))
+    groups = {}
+    for result in scored:
+        if not result["passed"] or result["score"] < minimum_score:
+            continue
+        operator = result["operator"]
+        groups.setdefault(operator["id"], {"operator": operator, "results": []})[
+            "results"
+        ].append(result)
+    ranked_groups = []
+    for group in groups.values():
+        group["results"].sort(key=lambda item: -item["score"])
+        group["eligibleCount"] = len(group["results"])
+        group["averageScore"] = round(
+            sum(item["score"] for item in group["results"]) / len(group["results"]), 2
+        )
+        group["companyRating"] = group["operator"].get("ratingAvg")
+        ranked_groups.append(group)
+    ranked_groups.sort(
+        key=lambda group: (
+            -group["eligibleCount"],
+            -group["averageScore"],
+            -(group["companyRating"] or 0),
+            group["operator"].get("companyName", ""),
+        )
+    )
+    remaining = required
+    metadata = {}
+    plan_rank = 0
+    for group in ranked_groups:
+        allocation = min(remaining, group["eligibleCount"]) if remaining > 0 else 0
+        if allocation:
+            plan_rank += 1
+            remaining -= allocation
+        for index, result in enumerate(group["results"]):
+            metadata[result["truck"]["id"]] = {
+                "fleetPlanRank": plan_rank if allocation else None,
+                "operatorEligibleCount": group["eligibleCount"],
+                "operatorAverageScore": group["averageScore"],
+                "recommendedAllocation": allocation,
+                "selectedForFleetPlan": index < allocation,
+                "operatorCoveragePct": round(
+                    min(100, group["eligibleCount"] / required * 100), 1
+                ),
+                "companyRating": group["companyRating"],
+            }
+    return {"required": required, "covered": required - remaining, "metadata": metadata}

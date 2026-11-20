@@ -1,4 +1,4 @@
-from app.services.matching import score
+from app.services.matching import fleet_recommendations, score
 
 
 def _record(vehicle_verification):
@@ -64,4 +64,38 @@ def test_city_preferred_lane_matches_a_specific_address_in_that_city():
     )
     lane = next(item for item in rescored["breakdown"] if item["ruleId"] == "R-LANE")
     assert lane["earned"] == lane["weight"]
+
+
+def test_fleet_plan_prefers_largest_carrier_then_uses_fewest_companies():
+    def candidate(carrier, truck, score_value, rating):
+        return {
+            "passed": True,
+            "score": score_value,
+            "truck": {"id": truck},
+            "operator": {
+                "id": carrier,
+                "companyName": carrier,
+                "ratingAvg": rating,
+            },
+        }
+
+    scored = [
+        *[candidate("large", f"L-{index}", 80 + index, 4.1) for index in range(7)],
+        *[candidate("medium", f"M-{index}", 90 + index, 4.9) for index in range(4)],
+        *[candidate("small", f"S-{index}", 95 + index, 5.0) for index in range(2)],
+    ]
+    plan = fleet_recommendations(scored, trucks_required=10, minimum_score=70)
+
+    assert plan["covered"] == 10
+    large = plan["metadata"]["L-0"]
+    medium = plan["metadata"]["M-0"]
+    small = plan["metadata"]["S-0"]
+    assert large["fleetPlanRank"] == 1
+    assert large["recommendedAllocation"] == 7
+    assert medium["fleetPlanRank"] == 2
+    assert medium["recommendedAllocation"] == 3
+    assert small["fleetPlanRank"] is None
+    assert sum(
+        item["selectedForFleetPlan"] for item in plan["metadata"].values()
+    ) == 10
 

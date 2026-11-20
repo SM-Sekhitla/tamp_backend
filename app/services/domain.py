@@ -7,7 +7,14 @@ from app.core.errors import require
 from app.core.security import iso, new_id
 from app.db.models import OrganisationMembership, Party
 from app.schemas.domain import SCHEMAS
-from app.services.matching import BODIES, distance, matching_config, money, score
+from app.services.matching import (
+    BODIES,
+    distance,
+    fleet_recommendations,
+    matching_config,
+    money,
+    score,
+)
 from app.services.records import get, needed, put, rows
 
 COLLECTIONS = [
@@ -597,6 +604,10 @@ def sync(db, party, delta):
                         else load["ownerId"],
                         createdAt=iso(),
                     )
+                    if party.id == load["ownerId"]:
+                        driver_id = trip.get("assignedDriverId") or truck.get("driverId")
+                        if driver_id:
+                            data["driverId"] = driver_id
                 elif k == "disputes":
                     if old:
                         require(is_admin(party))
@@ -655,6 +666,27 @@ def sync(db, party, delta):
                     if len(ratings) >= 3
                     else None,
                 }
+                # Freight-owner ride feedback also contributes to the assigned
+                # driver's personal reputation while retaining the carrier's
+                # company-level rating above.
+                driver_id = data.get("driverId")
+                if driver_id:
+                    driver = db.get(Party, driver_id)
+                    if driver is not None:
+                        driver_ratings = [
+                            r.data["stars"]
+                            for r in rows(db, "ratings")
+                            if r.data.get("driverId") == driver_id
+                        ]
+                        driver.data = {
+                            **driver.data,
+                            "ratingCount": len(driver_ratings),
+                            "ratingAvg": round(
+                                sum(driver_ratings) / len(driver_ratings), 1
+                            )
+                            if len(driver_ratings) >= 3
+                            else None,
+                        }
     for k, ids in delta.deleteIds.items():
         if k == "audit":
             continue  # UI truncates its local audit view; history remains immutable.
@@ -707,8 +739,26 @@ def refresh_suggestions(db):
     for load in loads:
         if load["status"] != "POSTED" or dt(load["pickupWindow"]["to"]) < now():
             continue
+        scored_inventory = [
+            score(
+                load,
+                truck,
+                parties[truck["transporterId"]],
+                parties[load["ownerId"]],
+                config,
+            )
+            for truck in trucks
+        ]
+        scored_by_truck = {
+            result["truck"]["id"]: result for result in scored_inventory
+        }
+        fleet = fleet_recommendations(
+            scored_inventory,
+            load.get("trucksRequired", 1),
+            config["minimumScore"],
+        )
         for truck in trucks:
-            result = score(load, truck, parties[truck["transporterId"]], parties[load["ownerId"]], config)
+            result = scored_by_truck[truck["id"]]
             old = existing.get((load["id"], truck["id"]))
             if old and old.data["status"] != "SUGGESTED":
                 continue
@@ -729,6 +779,7 @@ def refresh_suggestions(db):
                     now() + timedelta(days=1), dt(load["pickupWindow"]["to"])
                 ).isoformat(),
                 createdAt=old.data["createdAt"] if old else iso(),
+                **fleet["metadata"].get(truck["id"], {}),
             )
             put(db, "matches", data, load["ownerId"])
             load_row = get(db, "loads", load["id"])

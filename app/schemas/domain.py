@@ -259,6 +259,13 @@ class Match(Input):
         "SUGGESTED", "OFFERED", "ACCEPTED", "CONFIRMED", "REJECTED", "WITHDRAWN", "EXPIRED"
     ]
     initiatedBy: Literal["FREIGHT_OWNER", "TRANSPORTER", "SYSTEM"]
+    fleetPlanRank: int | None = Field(default=None, ge=1)
+    operatorEligibleCount: int | None = Field(default=None, ge=1)
+    operatorAverageScore: float | None = Field(default=None, ge=0, le=100)
+    recommendedAllocation: int | None = Field(default=None, ge=0)
+    selectedForFleetPlan: bool | None = None
+    operatorCoveragePct: float | None = Field(default=None, ge=0, le=100)
+    companyRating: float | None = Field(default=None, ge=0, le=5)
     agreedRate: Money | None = None
     expiresAt: datetime
     createdAt: datetime
@@ -275,6 +282,7 @@ class Rating(Record):
     tripId: str
     raterId: str
     rateeId: str
+    driverId: str | None = Field(default=None, max_length=80)
     stars: int = Field(ge=1, le=5)
     tags: list[str] = Field(default_factory=list, max_length=20)
     comment: str | None = Field(default=None, max_length=4000)
