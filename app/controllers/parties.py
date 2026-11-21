@@ -186,6 +186,10 @@ def handle(action, data, db, request, response, party):
             **(party.onboarding or {}),
             "documents": documents,
         }
+        if party.data.get("role") == "DRIVER":
+            from app.services.driver_compliance import sync_registration_documents
+
+            sync_registration_documents(db, party, documents=documents)
         if party.data.get("ownerOperator"):
             from app.services.records import get, put
 

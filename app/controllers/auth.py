@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
-from app.api.deps import COOKIE, party_payload
+from app.api.deps import COOKIE, party_payload, request_session_token
 from app.core.config import settings
 from app.core.errors import require
 from app.core.security import (
@@ -94,6 +94,11 @@ def set_session(db, party, response, request):
         path="/",
         max_age=settings.session_hours * 3600,
     )
+    # Native React Native clients do not consistently expose Set-Cookie.
+    # Return the same opaque session token only when the app explicitly opts
+    # into the native authentication flow; it is stored in SecureStore.
+    if request.headers.get("x-tamp-mobile") == "1":
+        response.headers["X-TAMP-Session"] = token
 
 
 def revoke(db, party, keep=None):
@@ -167,7 +172,7 @@ def handle(action, data, db, request, response, party):
                 "email": user.email,
                 **({"devCode": result["devCode"]} if "devCode" in result else {}),
             }
-        old = request.cookies.get(COOKIE)
+        old = request_session_token(request)
         if old:
             db.execute(delete(Session).where(Session.token == token_hash(old)))
         set_session(db, user, response, request)
@@ -183,14 +188,14 @@ def handle(action, data, db, request, response, party):
             "Invalid or expired verification code",
             400,
         )
-        old = request.cookies.get(COOKIE)
+        old = request_session_token(request)
         if old:
             db.execute(delete(Session).where(Session.token == token_hash(old)))
         set_session(db, user, response, request)
         return party_payload(user, db)
     if action == "logout":
         db.execute(
-            delete(Session).where(Session.token == token_hash(request.cookies.get(COOKIE, "")))
+            delete(Session).where(Session.token == token_hash(request_session_token(request)))
         )
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
@@ -230,9 +235,9 @@ def handle(action, data, db, request, response, party):
         set_session(db, party, response, request)
         return {"ok": True, "signedOut": max(0, count - 1)}
     if action == "logoutOtherSessions":
-        return {"count": revoke(db, party, request.cookies.get(COOKIE))}
+        return {"count": revoke(db, party, request_session_token(request))}
     if action == "sessions":
-        current_token = token_hash(request.cookies.get(COOKIE, ""))
+        current_token = token_hash(request_session_token(request))
         return [
             {
                 "id": session.token,

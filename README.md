@@ -47,10 +47,9 @@ No database tables or users are silently created when the API starts.
 
 ## External services and dependencies
 
-TAMP does **not** use Keycloak. Authentication, session management and RBAC are
+Authentication, session management and RBAC are
 implemented by this backend using Argon2 password hashes, opaque
-PostgreSQL-backed sessions and organisation-scoped permissions. No Keycloak
-server, realm, client or environment variables are required.
+PostgreSQL-backed sessions and organisation-scoped permissions. 
 
 | Service | Requirement | Purpose | Configuration |
 | --- | --- | --- | --- |

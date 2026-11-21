@@ -208,9 +208,12 @@ async def driver_documents(
     from app.services.driver_compliance import list_documents
 
     party = await db.run_sync(lambda sync_db: current_party(sync_db, request))
-    return await db.run_sync(
+    result = await db.run_sync(
         lambda sync_db: list_documents(sync_db, party, organisation_id, driver_id)
     )
+    # Commits the one-time registration-document backfill for older drivers.
+    await db.commit()
+    return result
 
 
 @router.post("/api/v1/organisations/{organisation_id}/drivers/{driver_id}/documents", tags=["drivers"])

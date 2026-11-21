@@ -8,8 +8,18 @@ from app.db.models import Session, User
 COOKIE = "tamp_session"
 
 
+def request_session_token(request):
+    """Read a browser cookie or the native-app bearer session token."""
+    cookie = request.cookies.get(COOKIE, "")
+    if cookie:
+        return cookie
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
 def current_party(db, request, required=True):
-    raw = request.cookies.get(COOKIE, "")
+    raw = request_session_token(request)
     session = db.get(Session, token_hash(raw)) if raw else None
     current = now()
     idle_limit = current - timedelta(minutes=settings.session_idle_minutes)

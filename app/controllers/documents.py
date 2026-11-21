@@ -150,6 +150,10 @@ def handle(action, data, db, request, response, party):
                 updated.append(document)
         require(found, "Registration document not found", 404)
         user.onboarding = {**onboarding, "documents": updated}
+        if user.data.get("role") == "DRIVER":
+            from app.services.driver_compliance import sync_registration_documents
+
+            sync_registration_documents(db, user, documents=updated)
         recipient_id, subject_id = user.id, user.id
         document_name = _friendly_document_name(reviewed_document, "Registration document")
         document_filename = _filename_from_document(reviewed_document)
