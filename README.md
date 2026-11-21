@@ -45,9 +45,54 @@ uvicorn app.main:app --host 127.0.0.1 --port 5000 --reload --no-proxy-headers
 
 No database tables or users are silently created when the API starts.
 
+## External services and dependencies
+
+TAMP does **not** use Keycloak. Authentication, session management and RBAC are
+implemented by this backend using Argon2 password hashes, opaque
+PostgreSQL-backed sessions and organisation-scoped permissions. No Keycloak
+server, realm, client or environment variables are required.
+
+| Service | Requirement | Purpose | Configuration |
+| --- | --- | --- | --- |
+| PostgreSQL 16+ | Required | Application data, sessions, rate limits, audit records and webhook outbox | `DATABASE_URL` or the `POSTGRES_*` settings |
+| Mailjet | Conditional | Verification codes, invitations, password resets and account-status email | `MAILJET_API_KEY`, `MAILJET_SECRET_KEY`, `MAILJET_FROM_EMAIL`, `MAILJET_FROM_NAME` |
+| SMTP server | Conditional alternative | Email delivery when Mailjet is not configured | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` |
+| TomTom Maps APIs | Required when `GEOCODING_PROVIDER=tomtom` | South African address/POI autocomplete, place details and reverse geocoding | `TOMTOM_API_KEY`, optionally `TOMTOM_URL` |
+| Valhalla | Required when `ROUTING_PROVIDER=valhalla` | Road-route distance, duration and route geometry | `VALHALLA_URL` |
+| Photon | Optional fallback | OpenStreetMap-backed geocoding fallback | `PHOTON_URL` |
+| ClamAV | Optional; required when malware scanning is enforced | Uploaded-file malware scanning | `CLAMAV_HOST`, `CLAMAV_PORT`, `REQUIRE_MALWARE_SCAN=true` |
+| Customer webhook endpoints | Optional | Delivery of configured TAMP domain events | HTTPS hosts must be listed in `WEBHOOK_ALLOWED_HOSTS` |
+
+Production requires a real email provider: configure either Mailjet or SMTP.
+`DEV_EMAIL_CODES=true` is a local-development convenience only and is rejected
+in production. The example configuration selects TomTom and Valhalla, so those
+providers must be configured or deliberately replaced before deployment. Do
+not expose the TomTom or email-provider credentials to the browser bundle.
+
+The public Valhalla and Photon URLs in `.env.example` are development defaults,
+not availability guarantees. For production, use provider endpoints with an
+appropriate service agreement or operate controlled instances.
+
 ## Async runtime
 
 The API uses SQLAlchemy's async engine, `AsyncSession`, and the `asyncpg` PostgreSQL driver. FastAPI routes, rate limiting, startup bootstrap, Alembic migrations, and the webhook worker all use awaited I/O. Existing domain services run through SQLAlchemy's `AsyncSession.run_sync` compatibility bridge; SQLAlchemy database operations inside that bridge still yield through the async driver while preserving the established authorization and transaction logic.
+
+### Webhook worker observability
+
+The webhook worker writes structured JSON events to stdout and
+`logs/services/webhook_worker.log`. Each delivery records its delivery and
+endpoint identifiers, event type, attempt number, queue wait, outbox claim,
+endpoint lookup and persistence time, payload size, destination validation
+time, DNS time, outbound HTTP/total time, response status/size, total worker
+time, retry delay and outcome.
+Payload bodies, endpoint URLs, secrets, signatures and authorisation data are
+never logged.
+
+`WEBHOOK_SLOW_HTTP_MS` (default `1000`) and `WEBHOOK_SLOW_TOTAL_MS` (default
+`2000`) control slow-delivery warnings. Retriable failures are warnings and a
+fifth/terminal failure is an error. Useful events are
+`webhook_worker_started`, `webhook_delivery_started`,
+`webhook_delivery_completed`, and `webhook_worker_error`.
 
 ## Architecture and compatibility
 

@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     clamav_port: int = 3310
     require_malware_scan: bool = False
     webhook_allowed_hosts: list[str] = []
+    webhook_slow_http_ms: int = 1000
+    webhook_slow_total_ms: int = 2000
     log_path: str = "logs"
     log_max_bytes: int = 5 * 1024 * 1024
     log_backup_count: int = 5

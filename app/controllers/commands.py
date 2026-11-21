@@ -576,10 +576,28 @@ def handle(action, data, db, request, response, party):
                     ],
                 },
             )
-            put(db, "matches", {**match, "status": "WITHDRAWN"})
+            put(
+                db,
+                "matches",
+                {
+                    **match,
+                    "status": "WITHDRAWN",
+                    "excludedFromRematch": True,
+                    "withdrawalReason": description,
+                },
+            )
+            other_selected = any(
+                row.data["loadId"] == load["id"]
+                and row.data["id"] != match["id"]
+                and row.data["status"] in ["ACCEPTED", "CONFIRMED"]
+                for row in rows(db, "matches")
+            )
             target_load_status = (
-                "MATCHED" if owner and d.get("truckId") else
-                "POSTED" if carrier_side and before_pickup else "CANCELLED"
+                "MATCHED"
+                if (owner and d.get("truckId")) or (carrier_side and before_pickup and other_selected)
+                else "POSTED"
+                if carrier_side and before_pickup
+                else "CANCELLED"
             )
             if load["status"] != target_load_status:
                 require_transition("load", load["status"], target_load_status)

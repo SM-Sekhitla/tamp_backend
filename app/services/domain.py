@@ -731,6 +731,11 @@ def refresh_suggestions(db):
         for r in rows(db, "matches")
         if r.data["status"] not in ["WITHDRAWN", "EXPIRED"]
     }
+    excluded_pairs = {
+        (r.data["loadId"], r.data["truckPostingId"])
+        for r in rows(db, "matches")
+        if r.data.get("excludedFromRematch")
+    }
     owner_match_notifications = {
         (row.organisation_id, row.owner_id, row.data.get("subjectId"))
         for row in rows(db, "notifications")
@@ -770,6 +775,8 @@ def refresh_suggestions(db):
             config["minimumScore"],
         )
         for truck in trucks:
+            if (load["id"], truck["id"]) in excluded_pairs:
+                continue
             result = scored_by_truck[truck["id"]]
             old = existing.get((load["id"], truck["id"]))
             if old and old.data["status"] != "SUGGESTED":

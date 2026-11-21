@@ -168,7 +168,7 @@ def test_masked_truck_does_not_accept_forged_scoring_inputs(client, accounts):
     assert response.status_code == 403
 
 
-def test_webhook_outbox_and_worker_retry(client, accounts, monkeypatch):
+def test_webhook_outbox_and_worker_retry(client, accounts, monkeypatch, caplog):
     from app.services.records import rows
     from app.services.webhook_worker import tick
 
@@ -199,8 +199,19 @@ def test_webhook_outbox_and_worker_retry(client, accounts, monkeypatch):
             return 204
 
         monkeypatch.setattr("app.services.webhook_worker.deliver", delivery)
-        assert async_run(tick())
+        with caplog.at_level("INFO", logger="tamp.webhook_worker"):
+            assert async_run(tick())
         assert calls[0][2] == hook["secret"]
+        completed = [
+            record.message
+            for record in caplog.records
+            if '"event":"webhook_delivery_completed"' in record.message
+        ]
+        assert completed
+        assert '"outcome":"delivered"' in completed[-1]
+        assert '"total_ms":' in completed[-1]
+        assert '"queue_wait_ms":' in completed[-1]
+        assert '"payload_bytes":' in completed[-1]
 
         def verify_database(db):
             assert rows(db, "deliveries")[0].data["status"] == "DELIVERED"
