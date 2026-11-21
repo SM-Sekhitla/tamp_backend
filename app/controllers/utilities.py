@@ -60,10 +60,13 @@ def handle(procedure, data, db, request, response, party):
 
                 truck = with_vehicle_verification(db, truck)
                 if not is_admin(party):
-                    if role == "FREIGHT_OWNER":
-                        require(truck["status"] == "AVAILABLE")
-                    else:
+                    if role != "FREIGHT_OWNER":
                         require(truck["transporterId"] in organisation_users)
+                # Availability is a matching rule, not an authorization rule.
+                # During a multi-truck acceptance the first selected vehicle is
+                # immediately RESERVED. A concurrent score refresh must return
+                # that vehicle as ineligible instead of aborting the whole
+                # request with a misleading 403 permission error.
             require(tr is not None or truck["transporterId"] == party.id)
             operator_id = truck["transporterId"]
             op = operators.get(operator_id)
