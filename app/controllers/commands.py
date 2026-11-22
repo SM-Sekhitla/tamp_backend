@@ -11,9 +11,9 @@ from app.core.errors import AppError, require
 from app.core.security import iso, new_id, now
 from app.db.models import OrganisationMembership, Party, VehiclePosition
 from app.services.domain import audit, lock_domain, organisation_user_ids
-from app.services.maps import verify_route_token
-from app.services.lifecycle import require_transition
 from app.services.engagements import expire_stale_engagements
+from app.services.lifecycle import require_transition
+from app.services.maps import verify_route_token
 from app.services.matching import dt, matching_config, score
 from app.services.records import needed, put, rows
 
@@ -104,6 +104,44 @@ def prepare_offer(db, party, load, truck, match, data):
     require(match["status"] in ["SUGGESTED", "OFFERED", "ACCEPTED"], "Match cannot be reviewed", 409)
     require(dt(match["expiresAt"]) > now(), "Match expired", 409)
 
+    # Once the Freight Owner has accepted an allocation, those exact terms are
+    # immutable until the transporter confirms or declines them. Re-preparing
+    # the dialog must therefore return the accepted revision instead of
+    # superseding it with a new OPEN offer (which loses ownerAcceptedAt and
+    # makes transporter confirmation fail with "Owner acceptance required").
+    previous = sorted(
+        [r.data for r in rows(db, "match_offers") if r.data["matchId"] == match["id"]],
+        key=lambda item: item["revision"],
+        reverse=True,
+    )
+    if match["status"] == "ACCEPTED":
+        accepted = next(
+            (
+                item
+                for item in previous
+                if item.get("ownerAcceptedAt")
+                and dt(item["expiresAt"]) > now()
+            ),
+            None,
+        )
+        require(
+            accepted is not None,
+            "The Freight Owner's accepted terms are unavailable; ask them to review this allocation again",
+            409,
+        )
+        # Repair allocations affected by the former behaviour: preparing the
+        # transporter dialog could supersede the accepted revision and create
+        # a later OPEN revision. Restore the accepted revision as the only
+        # active one so existing engagements remain confirmable after deploy.
+        for item in previous:
+            if item["id"] != accepted["id"] and item["status"] in ["OPEN", "PARTIALLY_ACCEPTED"]:
+                put(db, "match_offers", {**item, "status": "SUPERSEDED"})
+        if accepted["status"] != "PARTIALLY_ACCEPTED":
+            accepted = {**accepted, "status": "PARTIALLY_ACCEPTED"}
+            put(db, "match_offers", accepted)
+        quote = needed(db, "route_quotes", accepted["routeQuoteId"]).data
+        return {**accepted, "routeQuote": quote}
+
     journey = verify_route_token(data.journeyRouteToken)
     require(same_point(journey["origin"], load["origin"]), "Journey origin changed", 409)
     require(same_point(journey["destination"], load["destination"]), "Journey destination changed", 409)
@@ -122,11 +160,6 @@ def prepare_offer(db, party, load, truck, match, data):
 
     business = business_terms(load, truck, match)
     business_hash = stable_hash(business)
-    previous = sorted(
-        [r.data for r in rows(db, "match_offers") if r.data["matchId"] == match["id"]],
-        key=lambda item: item["revision"],
-        reverse=True,
-    )
     if previous:
         active = previous[0]
         if (
@@ -185,11 +218,17 @@ def accepted_offer(db, data, load, truck, match):
     require(hmac.compare_digest(offer["termsHash"], data.termsHash), "Offer terms changed", 409)
     require(offer["status"] in ["OPEN", "PARTIALLY_ACCEPTED"], "Offer is no longer active", 409)
     require(dt(offer["expiresAt"]) > now(), "Offer expired", 409)
-    require(
-        offer["businessHash"] == stable_hash(business_terms(load, truck, match)),
-        "Load or vehicle terms changed; review the new offer",
-        409,
-    )
+    # Before the Freight Owner accepts, compare against live business data so
+    # stale terms can never be approved. Afterwards the accepted revision is
+    # the contract being confirmed. In particular, GPS updates legitimately
+    # change a truck's currentLocation and must not invalidate already accepted
+    # terms while the transporter is reviewing them.
+    if not offer.get("ownerAcceptedAt"):
+        require(
+            offer["businessHash"] == stable_hash(business_terms(load, truck, match)),
+            "Load or vehicle terms changed; review the new offer",
+            409,
+        )
     return offer
 
 

@@ -349,9 +349,40 @@ def test_offer_revision_and_hash_are_enforced(client, accounts):
             True,
         )
     )
+
+    # Live GPS can move after the Freight Owner accepts. Transporter review
+    # must still use the exact accepted revision instead of creating an OPEN
+    # replacement whose ownerAcceptedAt is empty.
+    def move_truck(db):
+        from app.services.records import needed, put
+
+        row = needed(db, "trucks", truck["id"], True)
+        put(
+            db,
+            "trucks",
+            {
+                **row.data,
+                "currentLocation": {
+                    **row.data["currentLocation"],
+                    "label": "Johannesburg live position",
+                    "lat": row.data["currentLocation"]["lat"] + 0.0001,
+                },
+            },
+        )
+
+    db_call(move_truck)
     login(client, "carrier")
     carrier_view = prepare_offer(client, load, truck)
     assert carrier_view == proof
+    confirmed = result(
+        rpc(
+            client,
+            "commands.confirmMatch",
+            {"loadId": load["id"], "truckId": truck["id"], **carrier_view},
+            True,
+        )
+    )
+    assert confirmed["tripId"]
 
 
 def test_tracking_is_signed_and_private(client, accounts):
