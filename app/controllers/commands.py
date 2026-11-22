@@ -120,7 +120,6 @@ def prepare_offer(db, party, load, truck, match, data):
                 item
                 for item in previous
                 if item.get("ownerAcceptedAt")
-                and dt(item["expiresAt"]) > now()
             ),
             None,
         )
@@ -217,7 +216,11 @@ def accepted_offer(db, data, load, truck, match):
     require(offer["revision"] == data.revision, "Offer revision changed", 409)
     require(hmac.compare_digest(offer["termsHash"], data.termsHash), "Offer terms changed", 409)
     require(offer["status"] in ["OPEN", "PARTIALLY_ACCEPTED"], "Offer is no longer active", 409)
-    require(dt(offer["expiresAt"]) > now(), "Offer expired", 409)
+    # OPEN terms are short-lived review drafts. Once the Freight Owner accepts
+    # them they become the locked allocation terms and remain confirmable until
+    # the match itself expires, is declined or is cancelled.
+    if not offer.get("ownerAcceptedAt"):
+        require(dt(offer["expiresAt"]) > now(), "Offer expired", 409)
     # Before the Freight Owner accepts, compare against live business data so
     # stale terms can never be approved. Afterwards the accepted revision is
     # the contract being confirmed. In particular, GPS updates legitimately
@@ -914,6 +917,9 @@ def handle(action, data, db, request, response, party):
         **offer,
         "status": "CONFIRMED" if final else "PARTIALLY_ACCEPTED",
         "transporterAcceptedAt" if final else "ownerAcceptedAt": accepted_at,
+        # An owner-approved allocation must not expire on the short draft-offer
+        # timer while its transporter is still reviewing it.
+        "expiresAt": offer["expiresAt"] if final else match["expiresAt"],
     }
     put(db, "match_offers", offer)
     receipt(db, party, match, offer, request)

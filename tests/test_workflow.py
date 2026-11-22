@@ -323,7 +323,7 @@ def test_ownership_server_fields_and_atomicity(client, accounts):
 
 
 def test_offer_revision_and_hash_are_enforced(client, accounts):
-    load, truck, _ = setup_match(client, accounts)
+    load, truck, match = setup_match(client, accounts)
     proof = prepare_offer(client, load, truck)
     repeated = prepare_offer(client, load, truck)
     assert repeated == proof
@@ -354,7 +354,7 @@ def test_offer_revision_and_hash_are_enforced(client, accounts):
     # must still use the exact accepted revision instead of creating an OPEN
     # replacement whose ownerAcceptedAt is empty.
     def move_truck(db):
-        from app.services.records import needed, put
+        from app.services.records import needed, put, rows
 
         row = needed(db, "trucks", truck["id"], True)
         put(
@@ -369,6 +369,16 @@ def test_offer_revision_and_hash_are_enforced(client, accounts):
                 },
             },
         )
+        for offer_row in rows(db, "match_offers"):
+            if offer_row.data["matchId"] == match["id"]:
+                put(
+                    db,
+                    "match_offers",
+                    {
+                        **offer_row.data,
+                        "expiresAt": (now() - timedelta(minutes=1)).isoformat(),
+                    },
+                )
 
     db_call(move_truck)
     login(client, "carrier")
