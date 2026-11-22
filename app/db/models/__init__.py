@@ -250,8 +250,9 @@ for name in [
         attrs[column] = mapped_column(ForeignKey(target + ".id"), nullable=False, index=True)
     MODELS[name] = type(name[0].upper() + name[1:], (Base,), attrs)
 Index(
-    "one_live_match_per_load",
+    "one_live_match_per_load_truck",
     MODELS["matches"].load_id,
+    MODELS["matches"].truck_id,
     unique=True,
     postgresql_where=text("data->>'status' IN ('ACCEPTED', 'CONFIRMED')"),
 )
@@ -263,8 +264,9 @@ Index(
 )
 Index("one_active_trip_per_truck_match", MODELS["trips"].match_id, unique=True)
 Index(
-    "one_reservation_per_load",
+    "one_reservation_per_load_truck",
     MODELS["reservations"].load_id,
+    MODELS["reservations"].truck_id,
     unique=True,
     postgresql_where=text("data->>'status' = 'RESERVED'"),
 )
