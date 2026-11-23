@@ -272,6 +272,12 @@ class Match(Input):
     confirmedByOwnerAt: str | None = None
     confirmedByTransporterAt: str | None = None
     rejectionReason: str | None = None
+    # Authoritative offer linkage written by the match command service. These
+    # fields are returned in snapshots and must survive client round-trips;
+    # lifecycle changes remain protected by the domain sync service.
+    activeOfferId: str | None = Field(default=None, max_length=80)
+    offerRevision: int | None = Field(default=None, ge=1)
+    termsHash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class Record(Input):
