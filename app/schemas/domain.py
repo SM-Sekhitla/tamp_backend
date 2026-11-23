@@ -364,6 +364,7 @@ class Proof(ProofInput):
 class Command(Input):
     loadId: str
     truckId: str | None = None
+    tripId: str | None = Field(default=None, max_length=80)
     proof: ProofInput | None = None
     offerId: str | None = Field(default=None, max_length=80)
     revision: int | None = Field(default=None, ge=1)

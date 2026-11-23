@@ -276,11 +276,22 @@ def handle(action, data, db, request, response, party):
     lock_domain(db)
     expire_stale_engagements(db)
     load = needed(db, "loads", d["loadId"], True).data
+    target_trip = None
+    target_match_id = None
+    if d.get("tripId"):
+        target_trip = needed(db, "trips", d["tripId"], True).data
+        require(
+            target_trip.get("matchId"),
+            "The selected trip is not linked to an allocation",
+            409,
+        )
+        target_match_id = target_trip["matchId"]
     candidates = [
         r.data
         for r in rows(db, "matches")
         if r.data["loadId"] == load["id"]
         and r.data["status"] in ["SUGGESTED", "OFFERED", "ACCEPTED", "CONFIRMED"]
+        and (not target_match_id or r.data["id"] == target_match_id)
         and (not d.get("truckId") or r.data["truckPostingId"] == d["truckId"])
     ]
     # A live preview is allowed to discover a newly eligible pair before the
@@ -748,7 +759,10 @@ def handle(action, data, db, request, response, party):
         return {"ok": True, "incidentId": incident["id"]}
     if action == "advanceTrip":
         assigned_driver = truck.get("driverId")
-        trip = next((r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]), None)
+        trip = target_trip or next(
+            (r.data for r in rows(db, "trips") if r.data["matchId"] == match["id"]),
+            None,
+        )
         require(trip is not None and trip["status"] in STEPS[:-1], "Trip cannot advance", 409)
         dispatches = [r.data for r in rows(db, "dispatches") if r.data["tripId"] == trip["id"]]
         if dispatches:
@@ -767,7 +781,10 @@ def handle(action, data, db, request, response, party):
             else party.id == truck["transporterId"] and party.data["role"] == "TRANSPORTER",
             "Only the assigned driver may advance this trip",
         )
-        stops = load_stops(load)
+        # Operational stop state belongs to a trip/allocation. The load's stop
+        # definitions are shared commercial terms and must never be mutated by
+        # one vehicle in a multi-truck shipment.
+        stops = trip.get("stops") or json.loads(json.dumps(load_stops(load)))
         status, stop_index = next_trip_step(trip, stops)
         require_transition("trip", trip["status"], status)
         current_stop = stops[stop_index]
@@ -846,8 +863,6 @@ def handle(action, data, db, request, response, party):
                 {"status": "COMPLETED", "at": event_at, "byUserId": party.id}
             )
 
-        load = {**load, "stops": stops}
-        put(db, "loads", load)
         completed_stops = sum(stop["status"] == "COMPLETED" for stop in stops)
         progress = 100 if status == "COMPLETED" else round(completed_stops / len(stops) * 90 + (5 if status in ["AT_PICKUP", "AT_DROPOFF"] else 0))
         trip = {
@@ -855,6 +870,7 @@ def handle(action, data, db, request, response, party):
             "status": status,
             "currentStopIndex": stop_index,
             "currentStopId": stops[stop_index]["id"],
+            "stops": stops,
             "progressPct": progress,
             "events": [*trip["events"], *transition_events],
             "suggestedAction": None,
@@ -873,7 +889,23 @@ def handle(action, data, db, request, response, party):
             },
         )
         if status == "COMPLETED":
-            put(db, "loads", {**load, "status": "COMPLETED"})
+            allocation_match_ids = {
+                row.data["id"]
+                for row in rows(db, "matches")
+                if row.data["loadId"] == load["id"]
+                and row.data["status"] == "CONFIRMED"
+            }
+            allocation_trips = [
+                row.data
+                for row in rows(db, "trips")
+                if row.data["matchId"] in allocation_match_ids
+            ]
+            all_allocations_complete = bool(allocation_match_ids) and (
+                len(allocation_trips) == len(allocation_match_ids)
+                and all(item["status"] == "COMPLETED" for item in allocation_trips)
+            )
+            if all_allocations_complete:
+                put(db, "loads", {**load, "status": "COMPLETED"})
             from app.services.finance import ensure_invoice_for_trip
 
             invoice = ensure_invoice_for_trip(db, trip, load, truck, match)
@@ -1072,6 +1104,7 @@ def handle(action, data, db, request, response, party):
             progressPct=0,
             currentStopIndex=0,
             currentStopId=load_stops(load)[0]["id"],
+            stops=json.loads(json.dumps(load_stops(load))),
             etaAt=None,
             geofences={
                 "PICKUP": {"inside": False},
