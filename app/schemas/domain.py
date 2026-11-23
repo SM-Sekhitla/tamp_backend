@@ -272,6 +272,9 @@ class Match(Input):
     confirmedByOwnerAt: str | None = None
     confirmedByTransporterAt: str | None = None
     rejectionReason: str | None = None
+    excludedFromRematch: bool | None = None
+    rejectedAt: str | None = None
+    rejectedByUserId: str | None = Field(default=None, max_length=80)
     # Authoritative offer linkage written by the match command service. These
     # fields are returned in snapshots and must survive client round-trips;
     # lifecycle changes remain protected by the domain sync service.

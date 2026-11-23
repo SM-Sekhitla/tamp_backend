@@ -342,6 +342,75 @@ def handle(action, data, db, request, response, party):
     truck = with_vehicle_verification(db, truck)
     if action == "prepareOffer":
         return prepare_offer(db, party, load, truck, match, data)
+    if action == "declineMatch":
+        require(
+            party.data["verification"] == "VERIFIED",
+            "Account verification is required",
+            403,
+        )
+        require(
+            truck["transporterId"] in organisation_user_ids(db, party),
+            "Only this transporter organisation may decline the allocation",
+            403,
+        )
+        require(
+            match["status"] == "ACCEPTED",
+            "Only an allocation awaiting transporter confirmation can be declined",
+            409,
+        )
+        require_transition("match", match["status"], "REJECTED")
+        rejected = {
+            **match,
+            "status": "REJECTED",
+            "rejectionReason": "Transporter declined",
+            "rejectedAt": iso(),
+            "rejectedByUserId": party.id,
+            # A refresh may continue matching the remaining fleet slots, but
+            # this exact truck must not immediately reappear for the same load.
+            "excludedFromRematch": True,
+        }
+        put(db, "matches", rejected)
+        for offer_row in rows(db, "match_offers"):
+            offer = offer_row.data
+            if offer["matchId"] == match["id"] and offer["status"] in ["OPEN", "PARTIALLY_ACCEPTED"]:
+                put(db, "match_offers", {**offer, "status": "SUPERSEDED"})
+
+        other_allocations = [
+            row.data
+            for row in rows(db, "matches")
+            if row.data["loadId"] == load["id"]
+            and row.data["id"] != match["id"]
+            and row.data["status"] in ["ACCEPTED", "CONFIRMED"]
+        ]
+        target_load_status = "MATCHED" if other_allocations else "POSTED"
+        if load["status"] != target_load_status:
+            require_transition("load", load["status"], target_load_status)
+            put(db, "loads", {**load, "status": target_load_status})
+
+        truck_has_commitment = any(
+            row.data["id"] != match["id"]
+            and row.data["truckPostingId"] == truck["id"]
+            and row.data["status"] in ["ACCEPTED", "CONFIRMED"]
+            for row in rows(db, "matches")
+        )
+        if not truck_has_commitment:
+            put(db, "trucks", {**truck, "status": "AVAILABLE"})
+
+        audit(
+            db,
+            party,
+            "MATCH_REJECTED",
+            "MATCH",
+            match["id"],
+            f"{load['id']} allocation declined by transporter",
+        )
+        notify(db, load["ownerId"], load["id"], "Truck allocation declined")
+        # Refill only the still-open fleet slots. excludedFromRematch keeps the
+        # rejected allocation out of the newly generated suggestions.
+        from app.services.domain import refresh_suggestions
+
+        refresh_suggestions(db)
+        return {"ok": True}
     if action == "requestJob":
         require(party.data["verification"] == "VERIFIED", "Account verification is required", 403)
         require(

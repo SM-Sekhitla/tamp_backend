@@ -405,6 +405,7 @@ PROCEDURE_PERMISSIONS = {
     "commands.acceptMatch": "matches.manage",
     "commands.confirmMatch": "matches.manage",
     "commands.acceptRequest": "matches.manage",
+    "commands.declineMatch": "matches.manage",
     "commands.advanceTrip": "trips.manage",
     "commands.cancelTrip": "trips.manage",
     "commands.reportIncident": "incidents.report",

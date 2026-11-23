@@ -99,7 +99,7 @@ group(
     "commands",
     [
         (n, d.OfferPrepare if n == "prepareOffer" else d.Command, True, False)
-        for n in ["prepareOffer", "requestJob", "advanceTrip", "acceptMatch", "confirmMatch", "acceptRequest"]
+        for n in ["prepareOffer", "requestJob", "advanceTrip", "acceptMatch", "confirmMatch", "acceptRequest", "declineMatch"]
     ] + [
         ("reportIncident", d.IncidentReport, True, False),
         ("cancelTrip", d.TripCancellation, True, False),
