@@ -43,6 +43,11 @@ class DriverTruck(Input):
         "SIDE_TIPPER",
         "LOWBED",
         "DROPSIDE",
+        "CONTAINER_SKELETAL",
+        "BOX_TRUCK",
+        "CRANE_TRUCK",
+        "CAR_CARRIER",
+        "LIVESTOCK_CARRIER",
     ]
     capacityT: float = Field(gt=0, le=200)
 
