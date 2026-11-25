@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from app.core.errors import require
 from app.core.security import iso, new_id
 from app.db.models import MODELS, Organisation, OrganisationMembership, User, UserRole
+from app.schemas.passenger import PASSENGER_SUBTYPES
 from app.services.driver_compliance import REQUIRED_DISPATCH_DOCUMENTS
 from app.services.rbac import ROLE_IDS, has_permission, require_permission
 from app.services.records import needed, put
@@ -20,8 +21,13 @@ PUBLIC_FIELDS = (
     "luggageKg", "luggageM3", "luggageDimensions", "location", "serviceArea",
     "availability", "photos",
 )
-REVIEW_FIELDS = ("type", "registration", "make", "model", "seats", "wheelchairPositions",
+REVIEW_FIELDS = ("type", "subtype", "registration", "make", "model", "seats", "wheelchairPositions",
                  "displacedSeats", "licenceExpiry", "permitExpiry", "photos", "documents")
+
+
+def subtype_details(data):
+    subtype = data.get("subtype")
+    return {"subtype": subtype, "subtypeLabel": PASSENGER_SUBTYPES[data["type"]].get(subtype)}
 
 
 def passenger_rows():
@@ -42,9 +48,9 @@ def drivers(db, org):
     ))
 
 
-def publication_issue(db, data, org):
+def publication_issue(db, data, org, *, through=None):
     now = datetime.now(SA)
-    today = now.date().isoformat()
+    today = max(now.date(), through or now.date()).isoformat()
     company = db.get(Organisation, org)
     if not company or company.verification != "VERIFIED":
         return "Your organisation must be verified."
@@ -92,7 +98,7 @@ def handle(action, data, db, request, response, party):
     org = db.info.get("active_organisation_id")
     if action == "reviews":
         require_permission(db, party, "platform.admin")
-        return [{"vehicle": row.data, "supplier": supplier(db, row)}
+        return [{"vehicle": {**row.data, **subtype_details(row.data)}, "supplier": supplier(db, row)}
                 for row in db.scalars(passenger_rows().order_by(VEHICLES.id))]
     if action == "review":
         require_permission(db, party, "platform.admin")
@@ -114,7 +120,7 @@ def handle(action, data, db, request, response, party):
     if action == "catalogue":
         require_permission(db, party, "loads.read")
         return [
-            {**{key: row.data[key] for key in PUBLIC_FIELDS}, "supplier": supplier(db, row)}
+            {**{key: row.data[key] for key in PUBLIC_FIELDS}, **subtype_details(row.data), "supplier": supplier(db, row), "mine": row.organisation_id == org}
             for row in db.scalars(passenger_rows().where(VEHICLES.data["published"].as_boolean().is_(True)))
             if not publication_issue(db, row.data, row.organisation_id)
         ]
@@ -123,8 +129,9 @@ def handle(action, data, db, request, response, party):
     require_permission(db, party, "trucks.read" if action == "fleet" else "trucks.manage")
     if action == "fleet":
         return {
+            "subtypes": PASSENGER_SUBTYPES,
             "vehicles": [
-                {**row.data, "publicationIssue": publication_issue(db, row.data, org)}
+                {**row.data, **subtype_details(row.data), "publicationIssue": publication_issue(db, row.data, org)}
                 for row in db.scalars(passenger_rows().where(VEHICLES.organisation_id == org))
             ],
             "drivers": [{"id": driver.id, "name": driver.data.get("contactName") or driver.email}
@@ -141,6 +148,8 @@ def handle(action, data, db, request, response, party):
     old = row.data if row else {}
     require(not row or old["version"] == data.version, "Vehicle changed. Refresh before editing.", 409)
     values = data.model_dump(mode="json", exclude={"id", "version"})
+    if "subtype" not in data.model_fields_set and data.type == old.get("type"):
+        values["subtype"] = old.get("subtype")
     registration = " ".join(data.registration.upper().split())
     registration_key = registration.replace(" ", "").replace("-", "")
     require(registration_key, "Enter a vehicle registration", 400)
@@ -165,6 +174,10 @@ def handle(action, data, db, request, response, party):
         "version": new_id("REV"), "category": "PASSENGER", "ownerId": old.get("ownerId", party.id),
         "status": "ACTIVE", "createdAt": old.get("createdAt", iso()), "updatedAt": iso(),
     }
+    if row and (review_changed or any(values[key] != old.get(key) for key in ("driverId", "availability", "luggageKg", "luggageM3", "luggageDimensions", "location", "serviceArea"))):
+        from app.controllers.passenger_charter import reservation_active
+
+        require(not reservation_active(db, row.id), "This vehicle has a confirmed passenger charter", 409)
     if review_changed:
         vehicle.update(verification="PENDING", reviewReason="", reviewedBy=None, reviewedAt=None, published=False)
     elif data.published:

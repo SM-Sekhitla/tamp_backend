@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from app.controllers import (
     asset_hire,
+    passenger_charter,
     auth,
     commands,
     documents,
@@ -179,6 +180,18 @@ group("passenger", [
     ("reviews", a.Empty, False, False),
     ("review", p.Review, True, False),
 ])
+group("charter", [
+    ("list", a.Empty, False, False),
+    ("search", p.CharterSearch, True, False),
+    ("requestGroup", p.CharterGroupRequest, True, False),
+    ("transitionGroup", p.CharterGroupAction, True, False),
+    ("replacementOptions", p.CharterReplacement, False, False),
+    ("replaceProvider", p.CharterReplacement, True, False),
+    ("request", p.CharterRequest, True, False),
+    ("recommend", p.CharterRecommendation, False, False),
+    ("quote", p.CharterQuote, True, False),
+    ("transition", p.CharterAction, True, False),
+])
 group("routes", [("compute", d.RouteInput, False, False)])
 group(
     "webhooks",
@@ -207,6 +220,7 @@ def dispatch(name, data, db, request, response, party):
     controllers = {
         "assetHire": asset_hire,
         "passenger": passenger,
+        "charter": passenger_charter,
         "auth": auth,
         "parties": parties,
         "users": parties,

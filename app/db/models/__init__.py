@@ -216,6 +216,7 @@ for name in [
     "loadTemplates",
     "hireAssets",
     "assetBookings",
+    "charterBookings",
     "assetMoves",
 ]:
     attrs = {
@@ -227,11 +228,14 @@ for name in [
         ),
         "data": mapped_column(Json, nullable=False),
     }
+    if name == "charterBookings":
+        attrs["organisation_id"] = mapped_column(ForeignKey("organisations.id"), nullable=False, index=True)
     refs = {
         "vehicleDriverAssignments": {"vehicle_id": "vehicles", "driver_id": "users"},
         "driverDocuments": {"driver_id": "users"},
         "trucks": {"vehicle_id": "vehicles"},
         "assetBookings": {"asset_id": "hireAssets", "supplier_id": "organisations"},
+        "charterBookings": {"supplier_id": "organisations"},
         "matches": {"load_id": "loads", "truck_id": "trucks"},
         "route_quotes": {"load_id": "loads", "truck_id": "trucks", "match_id": "matches"},
         "match_offers": {"match_id": "matches"},
