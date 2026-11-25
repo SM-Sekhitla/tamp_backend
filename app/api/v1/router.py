@@ -699,6 +699,10 @@ async def download(
         party = current_party(sync_db, request)
         record = needed(sync_db, "uploads", ident)
         allowed = record.owner_id == party.id or is_admin(party)
+        if not allowed and record.data["kind"] in {"PASSENGER_PHOTO", "PASSENGER_DOCUMENT"}:
+            from app.controllers.passenger import can_read_file
+
+            allowed = can_read_file(sync_db, party, record.data["url"], record.data["kind"])
         if not allowed and record.data["kind"] == "DRIVER_DOCUMENT":
             from app.db.models import MODELS, OrganisationMembership
             from app.services.rbac import permission_codes
@@ -721,7 +725,7 @@ async def download(
                     )
                 )
             )
-        if not allowed and record.data["kind"] not in {"KYC", "DRIVER_DOCUMENT", "ASSET_HANDOVER_PHOTO"}:
+        if not allowed and record.data["kind"] not in {"KYC", "DRIVER_DOCUMENT", "ASSET_HANDOVER_PHOTO", "PASSENGER_PHOTO", "PASSENGER_DOCUMENT"}:
             from app.services.domain import snapshot
 
             visible = snapshot(sync_db, party)

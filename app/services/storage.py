@@ -54,7 +54,7 @@ def own_upload(db, party, url, kind):
 
 def store(db, party, content, filename, kind):
     require(
-        kind in ["AVATAR", "KYC", "POD", "TRUCK_PHOTO", "ASSET_PHOTO", "ASSET_HANDOVER_PHOTO", "TRUCK_DOCUMENT", "DRIVER_DOCUMENT", "MESSAGE"],
+        kind in ["AVATAR", "KYC", "POD", "TRUCK_PHOTO", "ASSET_PHOTO", "PASSENGER_PHOTO", "PASSENGER_DOCUMENT", "ASSET_HANDOVER_PHOTO", "TRUCK_DOCUMENT", "DRIVER_DOCUMENT", "MESSAGE"],
         "Invalid file kind",
         400,
     )
@@ -72,7 +72,7 @@ def store(db, party, content, filename, kind):
     )
     if content.startswith(b"%PDF-"):
         require(
-            kind in ["KYC", "TRUCK_DOCUMENT", "DRIVER_DOCUMENT", "MESSAGE"],
+            kind in ["KYC", "PASSENGER_DOCUMENT", "TRUCK_DOCUMENT", "DRIVER_DOCUMENT", "MESSAGE"],
             "PDFs are not accepted for this upload",
             400,
         )

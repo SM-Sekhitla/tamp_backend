@@ -10,6 +10,7 @@ from app.controllers import (
     messages,
     operations,
     parties,
+    passenger,
     utilities,
     webhooks,
 )
@@ -19,6 +20,7 @@ from app.controllers import vehicles as vehicles_controller
 from app.schemas import asset_hire as assets
 from app.schemas import auth as a
 from app.schemas import domain as d
+from app.schemas import passenger as p
 from app.services.domain import snapshot, sync
 
 
@@ -170,6 +172,13 @@ group(
         ("reverse", d.ReverseGeocode, False, True),
     ],
 )
+group("passenger", [
+    ("catalogue", a.Empty, False, False),
+    ("fleet", a.Empty, False, False),
+    ("save", p.PassengerVehicle, True, False),
+    ("reviews", a.Empty, False, False),
+    ("review", p.Review, True, False),
+])
 group("routes", [("compute", d.RouteInput, False, False)])
 group(
     "webhooks",
@@ -197,6 +206,7 @@ def dispatch(name, data, db, request, response, party):
     prefix, action = name.split(".")
     controllers = {
         "assetHire": asset_hire,
+        "passenger": passenger,
         "auth": auth,
         "parties": parties,
         "users": parties,

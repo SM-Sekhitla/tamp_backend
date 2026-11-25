@@ -1,5 +1,6 @@
 """Permanent fleet assets and auditable driver assignment history."""
 
+from app.core.errors import require
 from app.core.security import iso, new_id
 from app.services.records import get, put, rows
 
@@ -42,6 +43,7 @@ def sync_vehicle_for_truck(db, actor, truck: dict, old: dict | None = None) -> N
     truck["vehicleId"] = vehicle_id
     vehicle_row = get(db, "vehicles", vehicle_id, True)
     vehicle = vehicle_row.data if vehicle_row else None
+    require(not vehicle or vehicle.get("category") != "PASSENGER", "Use a freight vehicle for a truck posting", 409)
     vehicle_document = _vehicle_document(truck, truck["transporterId"], vehicle)
     truck["vehicleVerification"] = vehicle_document["verification"]
     put(db, "vehicles", vehicle_document, truck["transporterId"])

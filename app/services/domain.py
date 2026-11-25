@@ -138,6 +138,7 @@ def attach_truck_document_metadata(db, truck, uploads_by_owner=None):
 
 def snapshot(db, party):
     all_rows = {k: [deepcopy(r.data) for r in rows(db, k)] for k in COLLECTIONS}
+    all_rows["vehicles"] = [v for v in all_rows["vehicles"] if v.get("category") != "PASSENGER"]
     if is_admin(party):
         uploads_by_owner = {}
         for upload in rows(db, "uploads"):
