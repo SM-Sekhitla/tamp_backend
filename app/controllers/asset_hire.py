@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 
 from sqlalchemy import or_, select
 
@@ -8,6 +8,7 @@ from app.core.security import iso, new_id
 from app.db.models import MODELS, Organisation
 from app.schemas.domain import LoadInput
 from app.services.domain import audit, lock_domain, refresh_suggestions, sanitize_load
+from app.services.finance import FREIGHT_VAT_RATE
 from app.services.notifications import notify_organisation
 from app.services.rbac import require_permission
 from app.services.records import needed, put
@@ -81,6 +82,69 @@ def _list(db, org):
         ],
         "bookings": [{**row.data, "incoming": row.supplier_id == org} for row in booking_rows],
     }
+
+
+def _invoice(booking):
+    cents = Decimal("0.01")
+    vat_rate = Decimal(str(FREIGHT_VAT_RATE))
+    amount = Decimal(booking["total"])
+    if booking["terms"]["vat"] == "incl":
+        total = amount
+        subtotal = (total / (1 + vat_rate)).quantize(cents, rounding=ROUND_HALF_UP)
+        vat = total - subtotal
+    else:
+        subtotal = amount
+        vat = (subtotal * vat_rate).quantize(cents, rounding=ROUND_HALF_UP)
+        total = subtotal + vat
+    return {
+        "number": "AR-" + booking["id"].removeprefix("HIRE-").upper(),
+        "issuedAt": iso(), "currency": "ZAR", "subtotal": str(subtotal),
+        "vatRate": str(vat_rate), "vat": str(vat), "total": str(total),
+        "paid": "0.00", "balance": str(total), "status": "OUTSTANDING",
+        "payments": [],
+    }
+
+
+def _billing(action, data, db, party, org):
+    row = needed(db, "assetBookings", data.id, True)
+    require(row.supplier_id == org, "Only the asset owner can manage rental billing", 403)
+    require_permission(db, party, "trucks.manage")
+    require(row.data["status"] == "COMPLETED", "Complete the rental before billing", 409)
+    invoice = row.data.get("invoice")
+    if action == "issueInvoice":
+        if invoice:
+            return invoice
+        invoice = _invoice(row.data)
+        title = "Asset rental invoice issued"
+        event = "ASSET_RENTAL_INVOICE_ISSUED"
+    else:
+        require(invoice is not None, "Issue the rental invoice first", 409)
+        reference = data.reference.strip()
+        require(reference, "Enter a payment reference", 400)
+        existing = next((item for item in invoice["payments"] if item["reference"].casefold() == reference.casefold()), None)
+        if existing:
+            require(Decimal(existing["amount"]) == data.amount, "This payment reference is already recorded", 409)
+            return invoice
+        balance = Decimal(invoice["balance"]) - data.amount
+        require(balance >= 0, "Payment exceeds the outstanding balance", 400)
+        payment = {
+            "id": new_id("RP"), "amount": format(data.amount, ".2f"),
+            "reference": reference, "recordedAt": iso(), "recordedBy": party.id,
+        }
+        invoice = {
+            **invoice, "paid": format(Decimal(invoice["paid"]) + data.amount, ".2f"),
+            "balance": format(balance, ".2f"), "status": "PAID" if balance == 0 else "PARTIALLY_PAID",
+            "payments": [*invoice["payments"], payment],
+        }
+        title = "Asset rental payment recorded"
+        event = "ASSET_RENTAL_PAYMENT_RECORDED"
+    row.data = {**row.data, "invoice": invoice}
+    audit(db, party, event, "ASSET_HIRE", row.id, title)
+    notify_organisation(
+        db, row.organisation_id, title=title, detail=row.data["assetName"],
+        subject_type="ASSET_HIRE", subject_id=row.id,
+    )
+    return invoice
 
 
 def handle(action, data, db, request, response, party):
@@ -174,6 +238,40 @@ def handle(action, data, db, request, response, party):
         audit(db, party, "ASSET_HIRE_" + status, "ASSET_HIRE", row.id, data.reason.strip() or status)
         _notify(db, row.data, row.organisation_id if incoming else row.supplier_id)
         return row.data
+
+    if action in {"issueInvoice", "recordPayment"}:
+        return _billing(action, data, db, party, org)
+
+    if action == "handover":
+        row = needed(db, "assetBookings", data.id, True)
+        require(org in {row.organisation_id, row.supplier_id}, "Rental not found", 404)
+        incoming = row.supplier_id == org
+        require_permission(db, party, "trucks.manage" if incoming else booking_permission)
+        allowed = {"IN_HIRE", "COMPLETED"}
+        if data.stage == "DELIVERY":
+            allowed.add("CONFIRMED")
+        require(row.data["status"] in allowed, "Handover is unavailable for this rental status", 409)
+        require(
+            set(data.checks) == {"assetIdentity", "conditionInspected", "attachmentsChecked"}
+            and all(data.checks.values()),
+            "Complete the handover checklist first", 400,
+        )
+        require(data.condition != "DAMAGE_FOUND" or data.notes.strip(), "Describe the damage", 400)
+        side = "OWNER" if incoming else "RENTER"
+        reports = row.data.get("handovers", {})
+        stage = reports.get(data.stage, {})
+        require(side not in stage, "Your organisation already recorded this handover", 409)
+        for url in data.photos:
+            own_upload(db, party, url, "ASSET_HANDOVER_PHOTO")
+        report = {**values, "recordedAt": iso(), "recordedBy": party.id}
+        row.data = {**row.data, "handovers": {**reports, data.stage: {**stage, side: report}}}
+        title = f"Asset rental {data.stage.lower()} recorded"
+        audit(db, party, "ASSET_HANDOVER_RECORDED", "ASSET_HIRE", row.id, title)
+        notify_organisation(
+            db, row.organisation_id if incoming else row.supplier_id,
+            title=title, detail=row.data["assetName"], subject_type="ASSET_HIRE", subject_id=row.id,
+        )
+        return report
 
     if action == "move":
         require_permission(db, party, "loads.manage" if role == "FREIGHT_OWNER" else "trucks.manage")

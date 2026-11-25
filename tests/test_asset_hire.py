@@ -1,9 +1,13 @@
 from datetime import timedelta
+from io import BytesIO
+
+from PIL import Image
 
 from app.core.security import now
 from app.services.matching import score
+from app.services.records import needed
 
-from .conftest import login, result, rpc
+from .conftest import db_call, login, result, rpc
 from .test_workflow import DEST, PLACE, fixtures
 
 
@@ -34,6 +38,28 @@ def test_fixed_rate_hire_and_linked_transport(client, accounts):
     result(rpc(client, "assetHire.save", {**asset_input, "id": asset["id"], "rate": "9000"}, True))
     row = result(rpc(client, "assetHire.transition", {"id": booking["id"], "action": "CONFIRM"}, True))
     assert row["total"] == "25500.00"
+    image = BytesIO()
+    Image.new("RGB", (16, 16), "yellow").save(image, "PNG")
+    uploaded = client.post(
+        "/api/uploads", data={"kind": "ASSET_HANDOVER_PHOTO"},
+        files={"file": ("condition.png", image.getvalue(), "image/png")},
+    )
+    assert uploaded.status_code == 200
+    photo = uploaded.json()["url"]
+    report = {
+        "id": booking["id"], "stage": "DELIVERY", "condition": "GOOD",
+        "checks": {"assetIdentity": True, "conditionInspected": True, "attachmentsChecked": True},
+        "photos": [photo],
+    }
+    assert result(rpc(client, "assetHire.handover", report, True))["photos"] == [photo]
+    assert rpc(client, "assetHire.handover", report, True).status_code == 409
+    assert rpc(client, "assetHire.handover", {**report, "stage": "RETURN"}, True).status_code == 409
+    login(client, "other")
+    assert client.get(photo).status_code == 403
+    login(client, "owner")
+    assert client.get(photo).status_code == 200
+    assert rpc(client, "assetHire.handover", report, True).status_code == 403
+    login(client, "carrier")
     conflict = rpc(client, "assetHire.transition", {"id": other["id"], "action": "CONFIRM"}, True)
     assert "unavailable" in conflict.text
     move_input = {
@@ -53,6 +79,36 @@ def test_fixed_rate_hire_and_linked_transport(client, accounts):
     standalone = result(rpc(client, "assetHire.move", {**move_input, "bookingId": None}, True))
     assert standalone != move
     assert result(rpc(client, "assetHire.list"))["moves"][0]["id"] == standalone["id"]
+
+    rental = {"id": booking["id"]}
+    assert rpc(client, "assetHire.issueInvoice", rental, True).status_code == 409
+
+    def move_start_to_past(db):
+        record = needed(db, "assetBookings", booking["id"])
+        record.data = {**record.data, "start": (now() - timedelta(hours=1)).isoformat()}
+
+    db_call(move_start_to_past)
+    result(rpc(client, "assetHire.transition", {**rental, "action": "START"}, True))
+    result(rpc(client, "assetHire.transition", {**rental, "action": "COMPLETE"}, True))
+    invoice = result(rpc(client, "assetHire.issueInvoice", rental, True))
+    assert invoice["total"] == "29325.00"
+    assert invoice["vat"] == "3825.00"
+    assert result(rpc(client, "assetHire.issueInvoice", rental, True)) == invoice
+    payment = {**rental, "amount": "10000.00", "reference": "EFT-001"}
+    partial = result(rpc(client, "assetHire.recordPayment", payment, True))
+    assert partial["status"] == "PARTIALLY_PAID"
+    assert partial["balance"] == "19325.00"
+    assert result(rpc(client, "assetHire.recordPayment", payment, True)) == partial
+    assert rpc(client, "assetHire.recordPayment", {**payment, "amount": "1"}, True).status_code == 409
+    assert rpc(client, "assetHire.recordPayment", {**payment, "reference": "EFT-002", "amount": "20000"}, True).status_code == 400
+    settled = result(rpc(client, "assetHire.recordPayment", {**payment, "reference": "EFT-002", "amount": "19325"}, True))
+    assert settled["status"] == "PAID"
+    assert settled["balance"] == "0.00"
+    login(client, "owner")
+    assert rpc(client, "assetHire.recordPayment", payment, True).status_code == 403
+    assert result(rpc(client, "assetHire.list"))["bookings"][0]["invoice"] == settled
+    login(client, "other")
+    assert [row["id"] for row in result(rpc(client, "assetHire.list"))["bookings"]] == [other["id"]]
 
 
 def test_asset_move_dimensions_are_a_hard_filter(accounts):

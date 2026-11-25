@@ -69,6 +69,25 @@ class Action(Input):
     reason: str = Field(default="", max_length=1000)
 
 
+class Handover(Input):
+    id: str = Field(max_length=80)
+    stage: Literal["DELIVERY", "RETURN"]
+    condition: Literal["GOOD", "DAMAGE_FOUND"]
+    meterHours: float | None = Field(default=None, ge=0, le=1000000)
+    checks: dict[Literal["assetIdentity", "conditionInspected", "attachmentsChecked"], bool]
+    notes: str = Field(default="", max_length=2000)
+    photos: list[str] = Field(min_length=1, max_length=6)
+
+
+class RentalInvoice(Input):
+    id: str = Field(max_length=80)
+
+
+class RentalPayment(RentalInvoice):
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    reference: str = Field(min_length=1, max_length=120)
+
+
 class Move(Input):
     assetId: str = Field(max_length=80)
     bookingId: str | None = Field(default=None, max_length=80)

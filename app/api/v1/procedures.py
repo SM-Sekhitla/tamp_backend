@@ -127,6 +127,9 @@ group("assetHire", [
     ("request", assets.Booking, True, False),
     ("transition", assets.Action, True, False),
     ("move", assets.Move, True, False),
+    ("handover", assets.Handover, True, False),
+    ("issueInvoice", assets.RentalInvoice, True, False),
+    ("recordPayment", assets.RentalPayment, True, False),
 ])
 group("dispatch", [("action", d.DispatchAction, True, False)])
 group(

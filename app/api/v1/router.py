@@ -721,7 +721,7 @@ async def download(
                     )
                 )
             )
-        if not allowed and record.data["kind"] not in {"KYC", "DRIVER_DOCUMENT"}:
+        if not allowed and record.data["kind"] not in {"KYC", "DRIVER_DOCUMENT", "ASSET_HANDOVER_PHOTO"}:
             from app.services.domain import snapshot
 
             visible = snapshot(sync_db, party)
@@ -754,6 +754,22 @@ async def download(
                     record.data["url"] in asset.data["photos"]
                     and (asset.organisation_id == org or asset.data["published"])
                     for asset in rows(sync_db, "hireAssets")
+                )
+        if not allowed and record.data["kind"] == "ASSET_HANDOVER_PHOTO":
+            from app.services.rbac import has_permission
+            from app.db.models import MODELS
+            from sqlalchemy import or_, select
+
+            org = sync_db.info.get("active_organisation_id")
+            if org and has_permission(sync_db, party, "loads.read"):
+                bookings = MODELS["assetBookings"]
+                allowed = any(
+                    record.data["url"] in report["photos"]
+                    for booking in sync_db.scalars(select(bookings).where(
+                        or_(bookings.organisation_id == org, bookings.supplier_id == org)
+                    ))
+                    for reports in booking.data.get("handovers", {}).values()
+                    for report in reports.values()
                 )
         require(allowed, "Private file")
         return record.id, dict(record.data)

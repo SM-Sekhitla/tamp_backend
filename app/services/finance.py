@@ -5,6 +5,9 @@ from app.core.security import new_id, now
 from app.services.records import put, rows
 
 
+FREIGHT_VAT_RATE = 0.15
+
+
 def _money(value):
     return round(float(value) + 1e-9, 2)
 
@@ -18,11 +21,11 @@ def ensure_invoice_for_trip(db, trip, load, truck, match):
     amount = _money(rate["amount"])
     if rate.get("vat") == "excl":
         subtotal = amount
-        vat_amount = _money(subtotal * 0.15)
+        vat_amount = _money(subtotal * FREIGHT_VAT_RATE)
         total = _money(subtotal + vat_amount)
     else:
         total = amount
-        subtotal = _money(total / 1.15)
+        subtotal = _money(total / (1 + FREIGHT_VAT_RATE))
         vat_amount = _money(total - subtotal)
     platform_fee = _money(subtotal * settings.platform_commission_rate)
     issued_at = now()
@@ -36,7 +39,7 @@ def ensure_invoice_for_trip(db, trip, load, truck, match):
         "carrierId": truck["transporterId"],
         "currency": "ZAR",
         "subtotal": subtotal,
-        "vatRate": 0.15,
+        "vatRate": FREIGHT_VAT_RATE,
         "vatAmount": vat_amount,
         "total": total,
         "platformFeeRate": settings.platform_commission_rate,
