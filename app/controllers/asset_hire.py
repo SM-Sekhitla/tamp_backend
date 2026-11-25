@@ -49,6 +49,25 @@ def _notify(db, booking, organisation_id):
     )
 
 
+def _rental_blocker(booking, asset_in_use=False):
+    status = booking["status"]
+    if status == "CONFIRMED":
+        if asset_in_use:
+            return "This asset is still out on another rental. Complete its return before starting this rental."
+        if datetime.fromisoformat(booking["start"]) > datetime.now(timezone.utc):
+            return "You can start at the scheduled rental start time."
+        stage = "DELIVERY"
+    elif status == "IN_HIRE":
+        stage = "RETURN"
+    else:
+        return None
+
+    reports = booking.get("handovers", {}).get(stage, {})
+    if not reports.get("OWNER") or not reports.get("RENTER"):
+        return f"The asset owner and renter must both record {stage.lower()} before you can {'start' if stage == 'DELIVERY' else 'complete'} this rental."
+    return None
+
+
 def _list(db, org):
     assets = MODELS["hireAssets"]
     bookings = MODELS["assetBookings"]
@@ -58,6 +77,7 @@ def _list(db, org):
     booking_rows = db.scalars(select(bookings).where(or_(
         bookings.organisation_id == org, bookings.supplier_id == org,
     ))).all()
+    in_use = {row.asset_id for row in booking_rows if row.supplier_id == org and row.data["status"] == "IN_HIRE"}
     displayed_ids = [row.id for row in assets_list]
     reservations = db.scalars(select(bookings).where(bookings.asset_id.in_(displayed_ids))).all()
     reserved_by_asset = {}
@@ -80,7 +100,10 @@ def _list(db, org):
             {**row.data, "mine": row.organisation_id == org, "reservations": reserved_by_asset.get(row.id, [])}
             for row in assets_list
         ],
-        "bookings": [{**row.data, "incoming": row.supplier_id == org} for row in booking_rows],
+        "bookings": [{
+            **row.data, "incoming": row.supplier_id == org,
+            "transitionBlocker": _rental_blocker(row.data, row.asset_id in in_use) if row.supplier_id == org else None,
+        } for row in booking_rows],
     }
 
 
@@ -227,8 +250,14 @@ def handle(action, data, db, request, response, party):
             require(asset.data["published"], "Publish the asset before confirming this booking", 409)
             require(datetime.fromisoformat(row.data["start"]) > datetime.now(timezone.utc), "The requested start time has passed", 409)
             _available(asset.data, row.data, _bookings(db, asset.id))
-        if data.action == "START":
-            require(datetime.fromisoformat(row.data["start"]) <= datetime.now(timezone.utc), "The hire has not started yet", 409)
+        if data.action in {"START", "COMPLETE"}:
+            # Every transition for this machine takes the asset lock first.
+            asset_in_use = data.action == "START" and any(
+                other.id != row.id and other.data["status"] == "IN_HIRE"
+                for other in _bookings(db, asset.id)
+            )
+            blocker = _rental_blocker(row.data, asset_in_use)
+            require(blocker is None, blocker, 409)
         if data.action in {"DECLINE", "CANCEL"}:
             require(data.reason.strip(), "Enter a reason", 400)
         row.data = {

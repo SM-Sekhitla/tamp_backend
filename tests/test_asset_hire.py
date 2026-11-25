@@ -87,9 +87,46 @@ def test_fixed_rate_hire_and_linked_transport(client, accounts):
         record = needed(db, "assetBookings", booking["id"])
         record.data = {**record.data, "start": (now() - timedelta(hours=1)).isoformat()}
 
+    assert rpc(client, "assetHire.transition", {**rental, "action": "START"}, True).status_code == 409
+
+    login(client, "other")
+    updated_asset = next(row for row in result(rpc(client, "assetHire.list"))["assets"] if row["id"] == asset["id"])
+    next_rental = {"id": result(rpc(client, "assetHire.request", {
+        **booking_input, "listingVersion": updated_asset["version"],
+        "start": end.isoformat(), "end": (end + timedelta(days=1)).isoformat(),
+    }, True))["id"]}
+    login(client, "carrier")
+    result(rpc(client, "assetHire.transition", {**next_rental, "action": "CONFIRM"}, True))
+
     db_call(move_start_to_past)
+    missing_delivery = rpc(client, "assetHire.transition", {**rental, "action": "START"}, True)
+    assert missing_delivery.status_code == 409
+    assert "both record delivery" in missing_delivery.text
+
+    login(client, "owner")
+    renter_upload = client.post(
+        "/api/uploads", data={"kind": "ASSET_HANDOVER_PHOTO"},
+        files={"file": ("renter-condition.png", image.getvalue(), "image/png")},
+    )
+    assert renter_upload.status_code == 200
+    renter_report = {**report, "photos": [renter_upload.json()["url"]]}
+    result(rpc(client, "assetHire.handover", renter_report, True))
+
+    login(client, "carrier")
     result(rpc(client, "assetHire.transition", {**rental, "action": "START"}, True))
+    blocked = rpc(client, "assetHire.transition", {**next_rental, "action": "START"}, True)
+    assert blocked.status_code == 409
+    assert "still out on another rental" in blocked.text
+    result(rpc(client, "assetHire.handover", {**report, "stage": "RETURN"}, True))
+    missing_return = rpc(client, "assetHire.transition", {**rental, "action": "COMPLETE"}, True)
+    assert missing_return.status_code == 409
+    assert "both record return" in missing_return.text
+    login(client, "owner")
+    result(rpc(client, "assetHire.handover", {**renter_report, "stage": "RETURN"}, True))
+    login(client, "carrier")
     result(rpc(client, "assetHire.transition", {**rental, "action": "COMPLETE"}, True))
+    unblocked = rpc(client, "assetHire.transition", {**next_rental, "action": "START"}, True)
+    assert "scheduled rental start time" in unblocked.text
     invoice = result(rpc(client, "assetHire.issueInvoice", rental, True))
     assert invoice["total"] == "29325.00"
     assert invoice["vat"] == "3825.00"
@@ -108,7 +145,7 @@ def test_fixed_rate_hire_and_linked_transport(client, accounts):
     assert rpc(client, "assetHire.recordPayment", payment, True).status_code == 403
     assert result(rpc(client, "assetHire.list"))["bookings"][0]["invoice"] == settled
     login(client, "other")
-    assert [row["id"] for row in result(rpc(client, "assetHire.list"))["bookings"]] == [other["id"]]
+    assert {row["id"] for row in result(rpc(client, "assetHire.list"))["bookings"]} == {other["id"], next_rental["id"]}
 
 
 def test_asset_move_dimensions_are_a_hard_filter(accounts):
