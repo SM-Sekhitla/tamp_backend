@@ -186,6 +186,8 @@ group("charter", [
     ("advanceJob", p.CharterLegProgress, True, False),
     ("publishPosition", p.CharterPosition, True, False),
     ("live", p.CharterLiveView, False, False),
+    ("driverOptions", p.CharterDriverOptions, False, False),
+    ("reassignDriver", p.CharterReassignDriver, True, False),
     ("list", a.Empty, False, False),
     ("search", p.CharterSearch, True, False),
     ("requestGroup", p.CharterGroupRequest, True, False),

@@ -497,6 +497,8 @@ def notify(db, row, org, title, recipient_roles):
 
 
 def handle(action, data, db, request, response, party):
+    if action in {"driverOptions", "reassignDriver"}:
+        return passenger_dispatch.reassign_driver(db, party, data, save=action == "reassignDriver")
     if action in {"driverJobs", "respondJob", "advanceJob", "publishPosition"}:
         return passenger_dispatch.handle(action, data, db, party)
     org = db.info.get("active_organisation_id")
@@ -580,6 +582,15 @@ def handle(action, data, db, request, response, party):
         require(incoming and record["status"] in {"REQUESTED", "QUOTED"}, "This request cannot be quoted", 409)
         require(now() < data.validUntil <= data.start,
                 "Quote expiry must be after now and on or before the reservation starts", 400)
+        for leg_key, deadline in (("outbound", data.outboundArrivalBy), ("returnLeg", data.returnArrivalBy)):
+            if deadline is None:
+                continue
+            leg = record.get(leg_key)
+            require(leg and timestamp(leg["estimatedArrival"]) <= deadline <= data.end,
+                    "An agreed drop-off must be on or after the estimated arrival and within the reservation", 400)
+            if leg_key == "outbound" and record.get("returnLeg"):
+                require(deadline <= timestamp(record["returnLeg"]["pickupAt"]),
+                        "Outbound drop-off must be on or before return pickup", 400)
         quote = data.model_dump(mode="json", exclude={"version", "id"})
         quote["vehicles"] = validate_allocation(db, row, quote)
         if record.get("quote"):

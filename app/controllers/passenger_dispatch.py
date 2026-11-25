@@ -182,6 +182,9 @@ def publish_position(db, row, vehicle, party, data):
 
 
 def live_vehicles(row):
+    from app.services.charter_eta import public_eta
+
+    clock = now()
     jobs = row.data.get("driverJobs", {})
     vehicles = []
     for vehicle in vehicle_progress(row):
@@ -193,6 +196,7 @@ def live_vehicles(row):
         vehicles.append({
             **vehicle, "bookingId": row.id, "supplier": row.data["supplier"],
             "activeLeg": leg, "position": visible_position,
+            "eta": public_eta(row.data, job, clock) if leg else None,
         })
     return vehicles
 
@@ -206,9 +210,91 @@ def supplier_assignments(db, row):
     )}
     return [{
         "vehicleId": vehicle["id"], "registration": vehicle["registration"],
+        "canReassign": can_reassign(row, vehicle["id"]),
         "driverName": drivers.get(vehicle["driverId"]) or "Assigned driver",
         **assignment_status(row, vehicle["id"]),
     } for vehicle in quote["vehicles"]]
+
+
+def can_reassign(row, vehicle_id):
+    if row.data["status"] != "CONFIRMED" or datetime.fromisoformat(row.data["quote"]["end"]) <= now():
+        return False
+    job = row.data.get("driverJobs", {}).get(vehicle_id, {})
+    return leg_progress(job, "outbound")["stage"] == "SCHEDULED"
+
+
+def reassign_driver(db, party, data, *, save=False):
+    from app.controllers.passenger import SA, VEHICLES, drivers, publication_issue
+    from app.controllers.passenger_charter import occupied_fleet, timestamp
+
+    org = db.info.get("active_organisation_id")
+    row = db.get(BOOKINGS, data.bookingId, with_for_update=save)
+    require(org and row and row.supplier_id == org, "Charter allocation not found", 404)
+    require_permission(db, party, "dispatch.manage", org)
+    quote = row.data.get("quote") or {}
+    quoted = next((v for v in quote.get("vehicles", []) if v["id"] == data.vehicleId), None)
+    require(quoted and can_reassign(row, data.vehicleId),
+            "Drivers can be replaced before the outbound leg starts", 409)
+    vehicle = db.get(VEHICLES, data.vehicleId, with_for_update=save)
+    require(vehicle and vehicle.organisation_id == org, "Charter vehicle not found", 404)
+    start, end = timestamp(quote["start"]), timestamp(quote["end"])
+    if save:
+        require(quoted["driverId"] == data.expectedDriverId,
+                "The assignment changed. Reopen the driver selector.", 409)
+        db.scalar(select(User.id).where(User.id == data.driverId).with_for_update())
+    _, busy = occupied_fleet(db, row.id, max(start, now()), end)
+    busy.update(v["driverId"] for v in quote["vehicles"])
+    through = end.astimezone(SA).date()
+    eligible = {
+        driver.id: driver for driver in drivers(db, org)
+        if driver.id not in busy and driver.data.get("role") == "DRIVER"
+        and not publication_issue(db, {**vehicle.data, "driverId": driver.id}, org, through=through)
+        and "dispatch.respond" in permission_codes(db, driver, org)
+        and "trips.manage" in permission_codes(db, driver, org)
+    }
+    if not save:
+        return {"expectedDriverId": quoted["driverId"], "drivers": sorted(
+            [{"id": driver.id, "name": driver.data.get("contactName") or driver.email} for driver in eligible.values()],
+            key=lambda driver: (driver["name"].casefold(), driver["id"]),
+        )}
+    reason = data.reason.strip()
+    require(reason, "Enter a reason for replacing the driver", 400)
+    require(data.driverId in eligible, "This driver is unavailable, lacks access, or needs compliance approval", 409)
+    record = row.data
+    old = record.get("driverJobs", {}).get(vehicle.id, {})
+    at = iso()
+    audit = {
+        "previousDriverId": quoted["driverId"], "driverId": data.driverId, "byUserId": party.id,
+        "previousStatus": old.get("status", "OFFERED"), "previousReason": old.get("reason"),
+        "reason": reason, "at": at,
+    }
+    job = {
+        "status": "OFFERED", "offeredAt": at,
+        "legs": old.get("legs", {}), "reassignments": [*old.get("reassignments", []), audit],
+    }
+    row.data = {
+        **record,
+        "quote": {**quote, "vehicles": [
+            {**v, "driverId": data.driverId} if v["id"] == vehicle.id else v for v in quote["vehicles"]
+        ]},
+        "driverJobs": {**record.get("driverJobs", {}), vehicle.id: job},
+        "updatedAt": at,
+        "history": [*record["history"], {"status": "DRIVER_REASSIGNED", "at": at,
+                                       "reason": f'Driver assignment updated for {quoted["registration"]}'}],
+    }
+    for driver_id, title in (
+        (quoted["driverId"], "Passenger charter assignment withdrawn"),
+        (data.driverId, "New passenger charter assignment"),
+    ):
+        notify_user(db, driver_id, title=title, detail=quoted["registration"],
+                    subject_type="CHARTER_JOB", subject_id=row.id, organisation_id=org)
+    notify_organisation(
+        db, row.organisation_id, title="Passenger charter driver reassigned",
+        detail=f'{quoted["registration"]} · Awaiting the replacement driver’s response',
+        subject_type="CHARTER_BOOKING", subject_id=row.id,
+        role_ids=[ROLE_IDS[role] for role in ("FREIGHT_OWNER", "CARGO_OPERATOR", "TRANSPORTER", "DISPATCHER")],
+    )
+    return {"vehicleId": vehicle.id, "status": "OFFERED"}
 
 
 def was_confirmed(row):
@@ -224,6 +310,12 @@ def active_driver_membership(db, driver_id, organisation_id):
         OrganisationMembership.organisation_id == organisation_id,
         OrganisationMembership.status == "ACTIVE",
     )) is not None
+
+
+def response_deadline(row, vehicle_id):
+    job = row.data.get("driverJobs", {}).get(vehicle_id, {})
+    deadline = row.data["quote"]["end"] if job.get("reassignments") else row.data["outbound"]["pickupAt"]
+    return datetime.fromisoformat(deadline)
 
 
 def driver_job(row, vehicle):
@@ -242,6 +334,7 @@ def driver_job(row, vehicle):
     return {
         "bookingId": row.id, "supplier": record["supplier"], "customer": record["customer"],
         "reservationStartsAt": record["quote"]["start"],
+        "responseDeadline": response_deadline(row, vehicle["id"]).isoformat(),
         "vehicle": {key: vehicle[key] for key in ("id", "registration", "make", "model")},
         "itinerary": itinerary, "notes": record["notes"], **status,
     }
@@ -284,9 +377,7 @@ def handle(action, data, db, party):
     current = assignment_status(row, vehicle["id"])["status"]
     if current == status:
         return driver_job(row, vehicle)
-    from app.controllers.passenger_charter import timestamp
-
-    require(current == "OFFERED" and timestamp(row.data["outbound"]["pickupAt"]) > now(),
+    require(current == "OFFERED" and response_deadline(row, vehicle["id"]) > now(),
             "This assignment is no longer awaiting a response", 409)
     reason = data.reason.strip()
     require(status != "DECLINED" or reason, "Enter a reason before declining the assignment", 400)

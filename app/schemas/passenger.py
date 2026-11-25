@@ -161,6 +161,8 @@ class CharterQuote(CharterRecommendation):
     vat: Literal["INCL", "EXCL"]
     terms: str = Field(default="", max_length=1500)
     validUntil: AwareDatetime
+    outboundArrivalBy: AwareDatetime | None = None
+    returnArrivalBy: AwareDatetime | None = None
 
 
 class CharterAction(Input):
@@ -213,3 +215,13 @@ class CharterPosition(CharterLiveView):
     lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
     accuracyM: float = Field(ge=0, le=5000, allow_inf_nan=False)
     recordedAt: AwareDatetime
+
+
+class CharterDriverOptions(CharterLiveView):
+    vehicleId: str = Field(max_length=80)
+
+
+class CharterReassignDriver(CharterDriverOptions):
+    driverId: str = Field(max_length=80)
+    expectedDriverId: str = Field(max_length=80)
+    reason: str = Field(min_length=1, max_length=500)

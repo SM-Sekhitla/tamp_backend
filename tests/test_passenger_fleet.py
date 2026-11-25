@@ -7,11 +7,12 @@ from sqlalchemy import select
 
 from app.controllers.auth import create_party
 from app.core.security import new_id, now
-from app.db.models import Organisation, OrganisationMembership, UserRole
+from app.db.models import Organisation, OrganisationMembership, User, UserRole
 from app.schemas.domain import Place, RouteInput
 from app.services.maps import _estimated_route
 from app.services.rbac import ROLE_IDS, primary_organisation_id
 from app.services.records import needed, put
+from app.services.charter_eta import pending, public_eta, write_eta
 
 from .conftest import db_call, login, result, rpc
 from .test_workflow import DEST, PLACE
@@ -212,6 +213,29 @@ def exercise_charter_booking(client, listing, availability_start):
             assert vehicle["activeLeg"] == "outbound"
             assert vehicle["position"]["recordedAt"] == sent["recordedAt"]
             assert vehicle["position"]["accuracyM"] == 8
+            def calculate_eta(db):
+                task = next(task for task in pending(db) if task[1] == first["id"])
+                write_eta(db, task, {"durationMin": 1700})
+                write_eta(db, task, {"durationMin": 1700})
+                row = needed(db, "charterBookings", first["id"])
+                job = row.data["driverJobs"][listing["id"]]
+                assert public_eta(row.data, job, now() + timedelta(seconds=91)) is None
+                for org in (row.organisation_id, row.supplier_id):
+                    from app.db.models import MODELS
+
+                    notifications = MODELS["notifications"]
+                    alerts = list(db.scalars(select(notifications).where(
+                        notifications.organisation_id == org,
+                        notifications.data["subjectId"].as_string() == row.id,
+                        notifications.data["title"].as_string() == "Charter pickup delay expected",
+                    )))
+                    assert len(alerts) == 1
+
+            db_call(calculate_eta)
+            [with_eta] = result(rpc(client, "charter.live", {"bookingId": first["id"]}))
+            assert with_eta["eta"]["checkpoint"] == "Pickup"
+            assert with_eta["eta"]["atRisk"] is True
+
             login(client, "driver")
         assert progress["revision"] == revision + 1
         assert result(advance("outbound", revision, action))["itinerary"]["outbound"]["progress"] == progress
@@ -363,11 +387,46 @@ def exercise_combined_charter(client, listing, availability_start):
     login(client, "bus3")
     [supplier] = allocations()
     assert supplier["driverAssignments"][0]["reason"] == "Conflict"
+    def seed_replacement(db):
+        provider = db.scalar(select(User).where(User.email == "bus3@example.com"))
+        org = primary_organisation_id(db, provider)
+        driver = create_party(db, "replacement@example.com", "Testing-password-123", "DRIVER", "Replacement", "Drivers")
+        driver.data = {**driver.data, "verification": "VERIFIED"}
+        db.add(OrganisationMembership(id=new_id("OM"), organisation_id=org, user_id=driver.id,
+                                      status="ACTIVE", is_primary=False, created_at=now()))
+        db.add(UserRole(id=new_id("UR"), user_id=driver.id, role_id=ROLE_IDS["DRIVER"],
+                        organisation_id=org, assigned_by=provider.id, created_at=now()))
+        db.info["active_organisation_id"] = org
+        for doc in ("PRDP", "DRIVING_LICENCE"):
+            put(db, "driverDocuments", {
+                "id": new_id("DD"), "driverId": driver.id, "documentType": doc, "reviewStatus": "APPROVED",
+                "expiresAt": (now() + timedelta(days=30)).isoformat(),
+            }, provider.id)
+        return driver.id
+
+    driver_id = db_call(seed_replacement)
+    target = {"bookingId": assigned["bookingId"], "vehicleId": assigned["vehicle"]["id"]}
+    options = result(rpc(client, "charter.driverOptions", target))
+    assert [driver["id"] for driver in options["drivers"]] == [driver_id]
+    payload = {**target, "driverId": driver_id, "expectedDriverId": options["expectedDriverId"], "reason": "Driver declined"}
+    login(client, "owner")
+    assert rpc(client, "charter.reassignDriver", payload, True).status_code == 404
+    login(client, "bus3")
+    assert result(rpc(client, "charter.reassignDriver", payload, True))["status"] == "OFFERED"
+    assert rpc(client, "charter.reassignDriver", payload, True).status_code == 409
+    login(client, "busdriver3")
+    assert result(rpc(client, "charter.driverJobs")) == []
+    assert rpc(client, "charter.respondJob", {**target, "action": "ACCEPT"}, True).status_code == 404
+    login(client, "replacement")
+    [replacement] = result(rpc(client, "charter.driverJobs"))
+    assert replacement["itinerary"] == assigned["itinerary"]
+    assert result(rpc(client, "charter.respondJob", {**target, "action": "ACCEPT"}, True))["status"] == "ACCEPTED"
+
     login(client, "owner")
     assert "gaps" in result(rpc(client, "charter.search", trip, True))[0]
     result(rpc(client, "charter.transitionGroup", action(allocations(), "CANCEL"), True))
     assert {row["status"] for row in allocations()} == {"CANCELLED"}
-    login(client, "busdriver3")
+    login(client, "replacement")
     [cancelled] = result(rpc(client, "charter.driverJobs"))
     assert cancelled["status"] == "CANCELLED"
     login(client, "owner")

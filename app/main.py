@@ -78,6 +78,17 @@ async def lifespan(app: FastAPI):
                 )
             await asyncio.sleep(60)
 
+    async def charter_eta_worker():
+        from app.services.charter_eta import refresh_charter_etas
+
+        while True:
+            try:
+                await refresh_charter_etas()
+            except Exception:
+                logging.getLogger("tamp.charter_eta").exception("Charter ETA worker failed")
+            await asyncio.sleep(15)
+
+    charter_eta_task = asyncio.create_task(charter_eta_worker()) if settings.valhalla_url and settings.routing_provider == "valhalla" else None
     recurring_task = asyncio.create_task(recurring_worker())
     compliance_notification_task = asyncio.create_task(compliance_notification_worker())
     engagement_expiry_task = asyncio.create_task(engagement_expiry_worker())
@@ -93,6 +104,10 @@ async def lifespan(app: FastAPI):
             await compliance_notification_task
         with suppress(asyncio.CancelledError):
             await engagement_expiry_task
+        if charter_eta_task:
+            charter_eta_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await charter_eta_task
         from app.services.maps import close_provider_client
 
         await close_provider_client()
