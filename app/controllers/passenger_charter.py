@@ -6,6 +6,7 @@ from itertools import combinations, groupby, islice
 
 from sqlalchemy import or_, select
 
+from app.controllers import passenger_dispatch
 from app.controllers.passenger import SA, VEHICLES, publication_issue, subtype_details
 from app.core.errors import AppError, require
 from app.core.security import iso, new_id, now
@@ -115,20 +116,7 @@ def occupied_fleet(db, booking_id, start, end):
 
 def validate_capacity(record, vehicles):
     for leg in filter(None, (record["outbound"], record.get("returnLeg"))):
-        wheelchair_count = leg["wheelchairPositions"]
-        ordinary = leg["passengers"] - wheelchair_count
-        # Find the minimum regular seats displaced while covering the requested
-        # wheelchair positions. A vehicle's accessibility setup is all-or-nothing.
-        losses = {0: 0}
-        for vehicle in vehicles:
-            if not vehicle["wheelchairPositions"]:
-                continue
-            for positions, lost in list(losses.items()):
-                covered = min(wheelchair_count, positions + vehicle["wheelchairPositions"])
-                losses[covered] = min(losses.get(covered, float("inf")), lost + vehicle["displacedSeats"])
-        seats = sum(vehicle["seats"] for vehicle in vehicles)
-        require(seats - losses.get(wheelchair_count, float("inf")) >= ordinary,
-                "The selected vehicles cannot seat everyone on one of the legs", 409)
+        passenger_dispatch.allocate_seats(leg, vehicles)
         require(sum(v["luggageKg"] for v in vehicles) >= leg["luggageKg"]
                 and sum(v["luggageM3"] for v in vehicles) >= leg["luggageM3"],
                 "The selected vehicles cannot carry the declared luggage on one of the legs", 409)
@@ -373,6 +361,11 @@ def request_group(db, party, org, data):
     return {"id": group_id}
 
 
+def passenger_manifest(record, vehicles):
+    return {key: passenger_dispatch.allocate_seats(record[key], vehicles, build_manifest=True)
+            for key in ("outbound", "returnLeg") if record.get(key)}
+
+
 def transition_group(db, org, data):
     rows = group_rows(db, org, data.id, lock=True)
     require(len(rows) >= 2, "Combined charter not found", 404)
@@ -400,12 +393,19 @@ def transition_group(db, org, data):
                 require(current == quote["vehicles"], "Vehicles or drivers changed; request a revised quote", 409)
             except AppError as exc:
                 raise AppError(f'{row.data["supplier"]}: {exc.message}', exc.status) from exc
-        validate_capacity(rows[0].data, [v.data for v in vehicles])
+        fleet = [v.data for v in vehicles]
+        validate_capacity(rows[0].data, fleet)
+        manifest = passenger_manifest(rows[0].data, fleet)
     else:
         require(data.reason.strip(), "Enter a cancellation reason", 400)
     status = "CONFIRMED" if data.action == "CONFIRM" else "CANCELLED"
     for row in rows:
+        previously_confirmed = row.data["status"] == "CONFIRMED"
         change_status(row, status, data.reason.strip())
+        if status == "CONFIRMED":
+            passenger_dispatch.initialise_jobs(db, row, manifest)
+        elif previously_confirmed:
+            passenger_dispatch.cancel_jobs(db, row)
         notify(db, row, row.supplier_id, "Combined charter " + status.lower(), ("TRANSPORTER", "DISPATCHER"))
     return {"id": data.id}
 
@@ -471,8 +471,12 @@ def public_quote(quote):
     }
 
 
-def response_for(row, org):
+def response_for(row, org, db=None):
     record = dict(row.data)
+    record.pop("driverJobs", None)
+    record["vehicleProgress"] = passenger_dispatch.vehicle_progress(row)
+    if db is not None and row.supplier_id == org:
+        record["driverAssignments"] = passenger_dispatch.supplier_assignments(db, row)
     record["history"] = [
         {key: value for key, value in event.items() if key != "quote"}
         if row.supplier_id == org else
@@ -493,12 +497,22 @@ def notify(db, row, org, title, recipient_roles):
 
 
 def handle(action, data, db, request, response, party):
+    if action in {"driverJobs", "respondJob", "advanceJob", "publishPosition"}:
+        return passenger_dispatch.handle(action, data, db, party)
     org = db.info.get("active_organisation_id")
     role = party.data.get("role")
     require(org and role in {"FREIGHT_OWNER", "TRANSPORTER"}, "Select your organisation", 403)
     require_permission(db, party, "loads.read")
+    if action == "live":
+        require_permission(db, party, "tracking.read")
+        row = db.get(BOOKINGS, data.bookingId)
+        require(row and org in {row.organisation_id, row.supplier_id}, "Charter not found", 404)
+        group_id = row.data.get("groupId")
+        rows = group_rows(db, org, group_id) if group_id and org == row.organisation_id else [row]
+        return [vehicle for entry in rows for vehicle in passenger_dispatch.live_vehicles(entry)]
+
     if action == "list":
-        return [response_for(row, org) for row in db.scalars(
+        return [response_for(row, org, db) for row in db.scalars(
             select(BOOKINGS).where(or_(BOOKINGS.organisation_id == org, BOOKINGS.supplier_id == org))
             .order_by(BOOKINGS.data["updatedAt"].as_string().desc(), BOOKINGS.id)
         )]
@@ -560,6 +574,7 @@ def handle(action, data, db, request, response, party):
     incoming = org == row.supplier_id
     require_permission(db, party, "trucks.manage" if incoming else "loads.manage" if role == "FREIGHT_OWNER" else "matches.manage")
     record = dict(row.data)
+    previously_confirmed = record["status"] == "CONFIRMED"
     require(record["version"] == data.version, "This charter changed. Refresh and review the latest details.", 409)
     if action == "quote":
         require(incoming and record["status"] in {"REQUESTED", "QUOTED"}, "This request cannot be quoted", 409)
@@ -596,6 +611,11 @@ def handle(action, data, db, request, response, party):
         "reason": getattr(data, "reason", "").strip(),
     }]
     row.data = record
+    if action == "transition" and data.action == "CONFIRM":
+        fleet = [db.get(VEHICLES, v["id"]).data for v in record["quote"]["vehicles"]]
+        passenger_dispatch.initialise_jobs(db, row, passenger_manifest(record, fleet))
+    elif previously_confirmed and record["status"] == "CANCELLED":
+        passenger_dispatch.cancel_jobs(db, row)
     notify(db, row, row.organisation_id if incoming else row.supplier_id,
            "Passenger charter " + record["status"].lower(),
            ("FREIGHT_OWNER", "TRANSPORTER", "DISPATCHER", "CARGO_OPERATOR"))

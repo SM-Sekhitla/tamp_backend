@@ -185,3 +185,31 @@ class CharterReplacement(Input):
     id: str = Field(max_length=80)
     version: str = Field(max_length=80)
     vehicleIds: list[str] = Field(default_factory=list, max_length=20)
+
+
+class CharterJobResponse(Input):
+    bookingId: str = Field(max_length=80)
+    vehicleId: str = Field(max_length=80)
+    action: Literal["ACCEPT", "DECLINE"]
+    reason: str = Field(default="", max_length=500)
+
+
+class CharterLegProgress(Input):
+    bookingId: str = Field(max_length=80)
+    vehicleId: str = Field(max_length=80)
+    leg: Literal["outbound", "returnLeg"]
+    action: Literal["START", "ARRIVE_PICKUP", "BOARD", "COMPLETE_STOP", "COMPLETE"]
+    revision: int = Field(ge=0, le=12)
+
+
+class CharterLiveView(Input):
+    bookingId: str = Field(max_length=80)
+
+
+class CharterPosition(CharterLiveView):
+    vehicleId: str = Field(max_length=80)
+    leg: Literal["outbound", "returnLeg"]
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    accuracyM: float = Field(ge=0, le=5000, allow_inf_nan=False)
+    recordedAt: AwareDatetime

@@ -99,16 +99,17 @@ def test_minibus_registration_review_and_publication(client, accounts):
 
 def exercise_charter_booking(client, listing, availability_start):
     pickup = availability_start + timedelta(hours=3)
-    route = _estimated_route(RouteInput(origin=Place(**PLACE), destination=Place(**DEST)))
+    stop = {**PLACE, "lat": (PLACE["lat"] + DEST["lat"]) / 2, "label": "Intermediate stop"}
+    route = _estimated_route(RouteInput(origin=Place(**PLACE), destination=Place(**DEST), waypoints=[Place(**stop)]))
     return_route = _estimated_route(RouteInput(origin=Place(**DEST), destination=Place(**PLACE)))
     leg = {
-        "origin": PLACE, "destination": DEST, "pickupAt": pickup.isoformat(),
+        "origin": PLACE, "destination": DEST, "stops": [stop], "pickupAt": pickup.isoformat(),
         "passengers": 14, "wheelchairPositions": 1, "routeToken": route["routeToken"],
     }
     request = {
         "id": str(uuid4()), "vehicleId": listing["id"], "outbound": leg,
         "returnLeg": {
-            **leg, "origin": DEST, "destination": PLACE, "passengers": 12,
+            **leg, "origin": DEST, "destination": PLACE, "stops": [], "passengers": 12,
             "pickupAt": (pickup + timedelta(hours=8)).isoformat(), "routeToken": return_route["routeToken"],
         },
         "contactName": "Test organiser", "contactPhone": "0821234567",
@@ -157,9 +158,82 @@ def exercise_charter_booking(client, listing, availability_start):
         "id": first["id"], "version": first["version"], "action": "CONFIRM",
     }, True))
     assert confirmed["status"] == "CONFIRMED"
+    response = {"bookingId": first["id"], "vehicleId": listing["id"], "action": "ACCEPT"}
+    login(client, "other")
+    assert rpc(client, "charter.driverJobs").status_code == 403
+    login(client, "driver")
+    [job] = result(rpc(client, "charter.driverJobs"))
+    assert job["status"] == "OFFERED"
+    assert job["itinerary"]["outbound"]["assigned"] == {"passengers": 14, "wheelchairPositions": 1}
+    assert job["itinerary"]["returnLeg"]["assigned"]["passengers"] == 12
+    assert "quote" not in job and "contactPhone" not in job
+    assert rpc(client, "charter.respondJob", {**response, "vehicleId": "other"}, True).status_code == 404
+    assert result(rpc(client, "charter.respondJob", response, True))["status"] == "ACCEPTED"
+    assert result(rpc(client, "charter.respondJob", response, True))["status"] == "ACCEPTED"
+
+    def advance(leg, revision, action):
+        return rpc(client, "charter.advanceJob", {
+            "bookingId": first["id"], "vehicleId": listing["id"], "leg": leg,
+            "action": action, "revision": revision,
+        }, True)
+
+    def publish(leg):
+        return rpc(client, "charter.publishPosition", {
+            "bookingId": first["id"], "vehicleId": listing["id"], "leg": leg,
+            "lat": PLACE["lat"], "lng": PLACE["lng"], "accuracyM": 8,
+            "recordedAt": now().isoformat(),
+        }, True)
+
+    assert publish("outbound").status_code == 409
+    assert advance("outbound", 0, "START").status_code == 409
+
+    def open_reservation(db):
+        row = needed(db, "charterBookings", first["id"])
+        row.data = {**row.data, "quote": {**row.data["quote"],
+                    "start": (now() - timedelta(minutes=1)).isoformat()}}
+
+    db_call(open_reservation)
+    assert advance("returnLeg", 0, "START").status_code == 409
+    assert advance("outbound", 0, "BOARD").status_code == 409
+    expected = ("TO_PICKUP", "AT_PICKUP", "ON_ROUTE", "ON_ROUTE", "COMPLETED")
+    for revision, action in enumerate(("START", "ARRIVE_PICKUP", "BOARD", "COMPLETE_STOP", "COMPLETE")):
+        if action == "COMPLETE_STOP":
+            assert advance("outbound", revision, "COMPLETE").status_code == 409
+        progress = result(advance("outbound", revision, action))["itinerary"]["outbound"]["progress"]
+        assert progress["stage"] == expected[revision]
+        if action == "START":
+            assert publish("returnLeg").status_code == 409
+            sent = result(publish("outbound"))
+            assert result(publish("outbound")) == sent
+            login(client, "other")
+            assert rpc(client, "charter.live", {"bookingId": first["id"]}).status_code == 404
+            login(client, "owner")
+            [vehicle] = result(rpc(client, "charter.live", {"bookingId": first["id"]}))
+            assert vehicle["activeLeg"] == "outbound"
+            assert vehicle["position"]["recordedAt"] == sent["recordedAt"]
+            assert vehicle["position"]["accuracyM"] == 8
+            login(client, "driver")
+        assert progress["revision"] == revision + 1
+        assert result(advance("outbound", revision, action))["itinerary"]["outbound"]["progress"] == progress
+    login(client, "owner")
+    [outbound_done] = [row for row in result(rpc(client, "charter.list")) if row["id"] == first["id"]]
+    [vehicle_progress] = outbound_done["vehicleProgress"]
+    assert vehicle_progress["legs"]["outbound"]["stage"] == "COMPLETED"
+    [vehicle] = result(rpc(client, "charter.live", {"bookingId": first["id"]}))
+    assert vehicle["activeLeg"] is None and vehicle["position"] is None
+    assert vehicle_progress["legs"]["returnLeg"]["stage"] == "SCHEDULED"
+    login(client, "driver")
+    for revision, action in enumerate(("START", "ARRIVE_PICKUP", "BOARD", "COMPLETE")):
+        returned = result(advance("returnLeg", revision, action))
+    assert returned["itinerary"]["returnLeg"]["progress"]["stage"] == "COMPLETED"
+    login(client, "owner")
+    [booked] = [row for row in result(rpc(client, "charter.list")) if row["id"] == first["id"]]
+    assert "driverJobs" not in booked and "driverAssignments" not in booked
     assert result(rpc(client, "charter.search", search, True)) == []
     assert rpc(client, "charter.request", {**request, "id": str(uuid4())}, True).status_code == 409
     login(client, "carrier")
+    [booked] = [row for row in result(rpc(client, "charter.list")) if row["id"] == first["id"]]
+    assert booked["driverAssignments"][0]["status"] == "ACCEPTED"
     assert result(rpc(client, "charter.recommend", {
         **recommendation, "id": second["id"], "version": second["version"],
     }))["vehicleIds"] == []
@@ -271,6 +345,29 @@ def exercise_combined_charter(client, listing, availability_start):
     }, True).status_code == 409
     result(rpc(client, "charter.transitionGroup", action(rows), True))
     assert {row["status"] for row in allocations()} == {"CONFIRMED"}
+    assert len(result(rpc(client, "charter.live", {"bookingId": group}))) == 2
+    login(client, "carrier")
+    [carrier_booking] = allocations()
+    [carrier_vehicle] = result(rpc(client, "charter.live", {"bookingId": carrier_booking["id"]}))
+    assert carrier_vehicle["bookingId"] == carrier_booking["id"]
+    login(client, "busdriver3")
+    [assigned] = result(rpc(client, "charter.driverJobs"))
+    login(client, "driver")
+    [own] = [job for job in result(rpc(client, "charter.driverJobs")) if job["bookingId"] in {row["id"] for row in rows}]
+    assert assigned["itinerary"]["outbound"]["assigned"]["passengers"] + own["itinerary"]["outbound"]["assigned"]["passengers"] == 23
+    foreign = {"bookingId": assigned["bookingId"], "vehicleId": assigned["vehicle"]["id"], "action": "DECLINE"}
+    assert rpc(client, "charter.respondJob", {**foreign, "reason": "Conflict"}, True).status_code == 404
+    login(client, "busdriver3")
+    assert rpc(client, "charter.respondJob", foreign, True).status_code == 400
+    assert result(rpc(client, "charter.respondJob", {**foreign, "reason": "Conflict"}, True))["status"] == "DECLINED"
+    login(client, "bus3")
+    [supplier] = allocations()
+    assert supplier["driverAssignments"][0]["reason"] == "Conflict"
+    login(client, "owner")
     assert "gaps" in result(rpc(client, "charter.search", trip, True))[0]
     result(rpc(client, "charter.transitionGroup", action(allocations(), "CANCEL"), True))
     assert {row["status"] for row in allocations()} == {"CANCELLED"}
+    login(client, "busdriver3")
+    [cancelled] = result(rpc(client, "charter.driverJobs"))
+    assert cancelled["status"] == "CANCELLED"
+    login(client, "owner")

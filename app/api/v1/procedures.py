@@ -181,6 +181,11 @@ group("passenger", [
     ("review", p.Review, True, False),
 ])
 group("charter", [
+    ("driverJobs", a.Empty, False, False),
+    ("respondJob", p.CharterJobResponse, True, False),
+    ("advanceJob", p.CharterLegProgress, True, False),
+    ("publishPosition", p.CharterPosition, True, False),
+    ("live", p.CharterLiveView, False, False),
     ("list", a.Empty, False, False),
     ("search", p.CharterSearch, True, False),
     ("requestGroup", p.CharterGroupRequest, True, False),
