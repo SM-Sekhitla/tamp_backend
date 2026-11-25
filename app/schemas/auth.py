@@ -24,6 +24,7 @@ class Login(Input):
 
 
 class Business(Input):
+    assetHireOnly: bool = False
     companyName: str = Field(min_length=1, max_length=200)
     registrationNumber: str = Field(max_length=100)
     businessType: str = Field(max_length=100)

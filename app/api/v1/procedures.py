@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from app.controllers import (
+    asset_hire,
     auth,
     commands,
     documents,
@@ -15,6 +16,7 @@ from app.controllers import (
 from app.controllers import dispatch as dispatch_controller
 from app.controllers import organisations as organisations_controller
 from app.controllers import vehicles as vehicles_controller
+from app.schemas import asset_hire as assets
 from app.schemas import auth as a
 from app.schemas import domain as d
 from app.services.domain import snapshot, sync
@@ -119,6 +121,13 @@ group(
         ("delete", d.FreightWorkspaceDelete, True, False),
     ],
 )
+group("assetHire", [
+    ("list", a.Empty, False, False),
+    ("save", assets.Asset, True, False),
+    ("request", assets.Booking, True, False),
+    ("transition", assets.Action, True, False),
+    ("move", assets.Move, True, False),
+])
 group("dispatch", [("action", d.DispatchAction, True, False)])
 group(
     "messages",
@@ -184,6 +193,7 @@ def dispatch(name, data, db, request, response, party):
         )
     prefix, action = name.split(".")
     controllers = {
+        "assetHire": asset_hire,
         "auth": auth,
         "parties": parties,
         "users": parties,

@@ -33,6 +33,7 @@ def upgrade():
         sa.column("role_id", sa.String),
         sa.column("permission_code", sa.String),
     )
+    roles = sa.table("roles", sa.column("id", sa.String))
     connection = op.get_bind()
 
     permission_exists = connection.execute(
@@ -50,6 +51,9 @@ def upgrade():
         )
 
     for role_id in ("ROLE-FREIGHT-OWNER", "ROLE-CARGO-OPERATOR"):
+        if connection.execute(sa.select(roles.c.id).where(roles.c.id == role_id)).first() is None:
+            # Fresh installs seed missing built-in roles on application startup.
+            continue
         exists = connection.execute(
             sa.select(role_permissions.c.role_id).where(
                 role_permissions.c.role_id == role_id,

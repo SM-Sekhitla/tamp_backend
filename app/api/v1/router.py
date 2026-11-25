@@ -745,6 +745,16 @@ async def download(
                     for message in rows(sync_db, "messages")
                 )
             )
+        if not allowed and record.data["kind"] == "ASSET_PHOTO":
+            from app.services.rbac import has_permission
+
+            org = sync_db.info.get("active_organisation_id")
+            if org and has_permission(sync_db, party, "loads.read"):
+                allowed = any(
+                    record.data["url"] in asset.data["photos"]
+                    and (asset.organisation_id == org or asset.data["published"])
+                    for asset in rows(sync_db, "hireAssets")
+                )
         require(allowed, "Private file")
         return record.id, dict(record.data)
 

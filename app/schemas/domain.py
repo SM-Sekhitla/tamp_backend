@@ -166,7 +166,15 @@ class LoadInput(Input):
         return self
 
 
+class TransportDimensions(Input):
+    lengthM: float = Field(gt=0, le=100)
+    widthM: float = Field(gt=0, le=30)
+    heightM: float = Field(gt=0, le=30)
+
+
 class Load(LoadInput):
+    assetMoveId: str | None = Field(default=None, max_length=80)
+    transportDimensions: TransportDimensions | None = None
     id: str = Field(min_length=1, max_length=80)
     reference: str
     status: Literal[
@@ -218,6 +226,7 @@ class Truck(Input):
     bodyType: Body
     payloadCapacityKg: float = Field(gt=0, le=200000, allow_inf_nan=False)
     volumeCapacityM3: float | None = Field(default=None, gt=0)
+    transportDimensions: TransportDimensions | None = None
     currentLocation: Place
     availableFrom: datetime
     availableTo: datetime

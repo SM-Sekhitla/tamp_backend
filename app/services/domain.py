@@ -305,9 +305,23 @@ def trip_context(db, trip_id, party):
     return trip, load, truck
 
 
-def sanitize_load(db, party, data, old=None):
+def sanitize_load(db, party, data, old=None, *, asset_move=False):
     organisation_users = organisation_user_ids(db, party)
-    require(party.data["role"] == "FREIGHT_OWNER" and data["ownerId"] in organisation_users)
+    linked_move = bool(old and old.get("assetMoveId"))
+    require(
+        data["ownerId"] in organisation_users
+        and (party.data["role"] == "FREIGHT_OWNER" or (
+            party.data["role"] == "TRANSPORTER" and (asset_move or linked_move)
+        ))
+    )
+    if not asset_move:
+        for key in ("assetMoveId", "transportDimensions"):
+            data.pop(key, None)
+            if linked_move:
+                data[key] = old[key]
+        if linked_move:
+            data["weightKg"] = old["weightKg"]
+            data["cargoType"] = old["cargoType"]
     if old:
         require(old["ownerId"] in organisation_users)
         require(

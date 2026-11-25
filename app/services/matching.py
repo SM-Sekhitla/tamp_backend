@@ -136,6 +136,11 @@ def score(load, truck, operator, owner, config=None):
             and owner.get("verification") == "VERIFIED"),
         ),
     ]
+    dimensions = load.get("transportDimensions")
+    if dimensions:
+        clearance = truck.get("transportDimensions") or {}
+        fits = all(clearance.get(axis, 0) >= value for axis, value in dimensions.items())
+        tests.append(("R-DIMENSIONS", "Declared transport dimensions fit", fits))
     utilisation = load["weightKg"] / truck["payloadCapacityKg"]
     preferred_lanes = truck.get("preferredLanes", [])
     lane = any(
