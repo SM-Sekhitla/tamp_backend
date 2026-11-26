@@ -136,10 +136,17 @@ def handle(action, data, db, request, response, party):
     require(org and role in {"TRANSPORTER", "FREIGHT_OWNER"}, "Select your organisation", 403)
     if action == "catalogue":
         require_permission(db, party, "loads.read")
+        from app.controllers.passenger_charter import confirmed_bookings, timestamp, now
+        # Hide vehicles with an outstanding reservation from the undated catalogue.
+        reserved_ids = {
+            vehicle["id"] for booking in db.scalars(confirmed_bookings())
+            if timestamp(booking.data["quote"]["end"]) > now()
+            for vehicle in booking.data["quote"]["vehicles"]
+        }
         return [
             {**{key: row.data[key] for key in PUBLIC_FIELDS}, **subtype_details(row.data), "supplier": supplier(db, row), "mine": row.organisation_id == org}
             for row in db.scalars(passenger_rows().where(VEHICLES.data["published"].as_boolean().is_(True)))
-            if not publication_issue(db, row.data, row.organisation_id)
+            if row.id not in reserved_ids and not publication_issue(db, row.data, row.organisation_id)
         ]
 
     require(role == "TRANSPORTER")
