@@ -315,6 +315,12 @@ def handle(action, data, db, request, response, party):
             prior = booking.data.get("moves", {}).get(data.direction)
             if prior:
                 return {"id": prior}
+            handovers = booking.data.get("handovers", {})
+            require(not handovers.get("RETURN"),
+                    "The asset return has already been recorded. No new transport is needed.", 409)
+            if data.direction == "DELIVERY":
+                require(booking.data["status"] == "CONFIRMED" and not handovers.get("DELIVERY"),
+                        "Delivery is already recorded or the rental has started. Arrange collection instead.", 409)
             terms = booking.data["terms"]
         else:
             require(asset.organisation_id == org, "Asset not found", 404)
