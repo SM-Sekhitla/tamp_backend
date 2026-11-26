@@ -106,6 +106,18 @@ def handle(action, data, db, request, response, party):
         require(row.data.get("category") == "PASSENGER", "Passenger vehicle not found", 404)
         require(row.data["version"] == data.version, "Vehicle changed. Refresh before reviewing.", 409)
         require(data.status != "REJECTED" or data.reason.strip(), "Enter a reason for rejection", 400)
+        if data.documentKey is not None:
+            require(row.data.get("documents", {}).get(data.documentKey), "Document not found", 404)
+            reviews = dict(row.data.get("documentReviews", {}))
+            reviews[data.documentKey] = {
+                "status": "APPROVED" if data.status == "VERIFIED" else "REJECTED",
+                "reason": data.reason.strip(), "reviewedBy": party.id, "reviewedAt": iso(),
+            }
+            updated = {**row.data, "documentReviews": reviews, "version": new_id("REV")}
+            if data.status == "REJECTED":
+                updated.update(verification="PENDING", published=False)
+            put(db, "vehicles", updated, row.owner_id)
+            return {"id": row.id}
         updated = {
             **row.data, "verification": data.status, "reviewReason": data.reason.strip(),
             "reviewedBy": party.id, "reviewedAt": iso(), "version": new_id("REV"),

@@ -109,6 +109,7 @@ class PassengerVehicle(Input):
 
 
 class Review(Input):
+    documentKey: Literal["licence", "roadworthy", "operatingLicence", "insurance"] | None = None
     id: str = Field(max_length=80)
     version: str = Field(max_length=80)
     status: Literal["VERIFIED", "REJECTED"]
