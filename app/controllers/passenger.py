@@ -48,7 +48,7 @@ def drivers(db, org):
     ))
 
 
-def publication_issue(db, data, org, *, through=None):
+def publication_issue(db, data, org, *, through=None, require_driver=False):
     now = datetime.now(SA)
     today = max(now.date(), through or now.date()).isoformat()
     company = db.get(Organisation, org)
@@ -60,6 +60,8 @@ def publication_issue(db, data, org, *, through=None):
         return "Renew the vehicle or operating licence."
     if datetime.fromisoformat(data["availability"]["end"]) <= now:
         return "Set a current availability window."
+    if not require_driver:
+        return None
     driver = next((entry for entry in drivers(db, org) if entry.id == data.get("driverId")), None)
     if not driver or driver.data.get("verification") != "VERIFIED" or driver.data.get("suspended"):
         return "Assign a verified driver from your organisation."

@@ -85,7 +85,7 @@ def validate_allocation(db, row, quote, *, lock=False):
         list(db.scalars(select(User.id).where(User.id.in_(driver_ids)).order_by(User.id).with_for_update()))
     through = end.astimezone(SA).date()
     for vehicle in vehicles:
-        issue = publication_issue(db, vehicle, row.supplier_id, through=through)
+        issue = publication_issue(db, vehicle, row.supplier_id, through=through, require_driver=True)
         require(not issue, issue or "", 409)
         availability = vehicle["availability"]
         require(timestamp(availability["start"]) <= start and timestamp(availability["end"]) >= end,

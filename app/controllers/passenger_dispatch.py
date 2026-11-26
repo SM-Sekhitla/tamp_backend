@@ -248,7 +248,7 @@ def reassign_driver(db, party, data, *, save=False):
     eligible = {
         driver.id: driver for driver in drivers(db, org)
         if driver.id not in busy and driver.data.get("role") == "DRIVER"
-        and not publication_issue(db, {**vehicle.data, "driverId": driver.id}, org, through=through)
+        and not publication_issue(db, {**vehicle.data, "driverId": driver.id}, org, through=through, require_driver=True)
         and "dispatch.respond" in permission_codes(db, driver, org)
         and "trips.manage" in permission_codes(db, driver, org)
     }
