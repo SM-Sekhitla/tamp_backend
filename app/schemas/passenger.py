@@ -226,3 +226,10 @@ class CharterReassignDriver(CharterDriverOptions):
     driverId: str = Field(max_length=80)
     expectedDriverId: str | None = Field(default=None, max_length=80)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class CharterRating(Input):
+    bookingId: str = Field(max_length=80)
+    vehicleId: str = Field(max_length=80)
+    stars: int = Field(ge=1, le=5)
+    comment: str = Field(default="", max_length=1000)

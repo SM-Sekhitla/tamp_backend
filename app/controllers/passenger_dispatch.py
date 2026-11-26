@@ -88,7 +88,10 @@ def leg_progress(job, leg):
 
 
 def public_progress(job, leg):
-    return {key: value for key, value in leg_progress(job, leg).items() if key in {"stage", "nextStop", "revision", "updatedAt"}}
+    progress = leg_progress(job, leg)
+    return {**{key: value for key, value in progress.items() if key in {"stage", "nextStop", "revision", "updatedAt"}},
+            "events": [{key: event[key] for key in ("action", "at", "stopIndex") if key in event}
+                       for event in progress.get("events", [])]}
 
 
 def vehicle_progress(row):
@@ -128,8 +131,6 @@ def advance_leg(db, row, vehicle, party, data):
         advance = ("COMPLETE_STOP", "ON_ROUTE") if stop < len(leg["stops"]) else ("COMPLETE", "COMPLETED")
     require(advance and data.action == advance[0], "Complete the current trip step first", 409)
     if data.action == "START":
-        require(datetime.fromisoformat(record["quote"]["start"]) <= now(),
-                "The vehicle reservation has not started yet", 409)
         require(data.leg != "returnLeg" or leg_progress(job, "outbound")["stage"] == "COMPLETED",
                 "Complete the outbound leg before starting the return", 409)
 
@@ -145,8 +146,30 @@ def advance_leg(db, row, vehicle, party, data):
     jobs[vehicle["id"]] = {**job, "progress": {**job.get("progress", {}), data.leg: progress}}
     if data.action == "COMPLETE":
         jobs[vehicle["id"]].pop("position", None)
-    row.data = {**record, "driverJobs": jobs, "updatedAt": at}
+    updated = {**record, "driverJobs": jobs, "updatedAt": at}
+    if all(vehicle_complete(updated, v["id"]) for v in record["quote"]["vehicles"]):
+        updated["completedAt"] = updated.get("completedAt") or at
+        updated["invoice"] = updated.get("invoice") or {
+            "number": f"CH-INV-{row.id}", "issuedAt": at, "status": "ISSUED",
+            "total": record["quote"]["total"], "vat": record["quote"]["vat"], "currency": "ZAR",
+            "customer": record["customer"], "supplier": record["supplier"],
+        }
+    row.data = updated
+    if data.action == "COMPLETE":
+        for org in (row.supplier_id, row.organisation_id):
+            notify_organisation(db, org, title="Passenger charter leg completed",
+                                detail=f'{vehicle.get("registration", vehicle["id"])} · {data.leg}',
+                                subject_type="CHARTER_BOOKING", subject_id=row.id,
+                                role_ids=[ROLE_IDS[r] for r in ("TRANSPORTER", "DISPATCHER", "FREIGHT_OWNER", "CARGO_OPERATOR")])
     return driver_job(row, vehicle)
+
+
+def vehicle_complete(record, vehicle_id):
+    job = record.get("driverJobs", {}).get(vehicle_id, {})
+    return job.get("status") == "ACCEPTED" and all(
+        leg_progress(job, key)["stage"] == "COMPLETED"
+        for key in ("outbound", "returnLeg") if record.get(key)
+    )
 
 
 def active_leg(job):
@@ -210,7 +233,7 @@ def supplier_assignments(db, row):
         select(User).where(User.id.in_([v["driverId"] for v in quote["vehicles"]]))
     )}
     return [{
-        "vehicleId": vehicle["id"], "registration": vehicle["registration"],
+        "vehicleId": vehicle["id"], "registration": vehicle["registration"], "driverId": vehicle.get("driverId"),
         "canReassign": can_reassign(row, vehicle["id"]),
         "driverName": drivers.get(vehicle["driverId"]) or "Driver not assigned",
         **assignment_status(row, vehicle["id"]),
@@ -344,7 +367,9 @@ def driver_job(row, vehicle):
         "reservationStartsAt": record["quote"]["start"],
         "responseDeadline": response_deadline(row, vehicle["id"]).isoformat(),
         "vehicle": {key: vehicle[key] for key in ("id", "registration", "make", "model")},
-        "itinerary": itinerary, "notes": record["notes"], **status,
+        "itinerary": itinerary, "notes": record["notes"],
+        "rating": record.get("ratings", {}).get(vehicle["id"]),
+        "completedAt": record.get("completedAt"), **status,
     }
 
 

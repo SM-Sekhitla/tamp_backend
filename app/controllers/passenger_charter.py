@@ -507,6 +507,22 @@ def handle(action, data, db, request, response, party):
     role = party.data.get("role")
     require(org and role in {"FREIGHT_OWNER", "TRANSPORTER"}, "Select your organisation", 403)
     require_permission(db, party, "loads.read")
+    if action == "rate":
+        require_permission(db, party, "loads.manage" if role == "FREIGHT_OWNER" else "matches.manage")
+        row = db.get(BOOKINGS, data.bookingId, with_for_update=True)
+        require(row and row.organisation_id == org, "Charter not found", 404)
+        require(row.data["status"] == "CONFIRMED" and passenger_dispatch.vehicle_complete(row.data, data.vehicleId),
+                "Complete this vehicle's entire journey before rating", 409)
+        ratings = dict(row.data.get("ratings", {}))
+        require(data.vehicleId not in ratings, "This journey has already been rated", 409)
+        vehicle = next(v for v in row.data["quote"]["vehicles"] if v["id"] == data.vehicleId)
+        ratings[data.vehicleId] = {"stars": data.stars, "comment": data.comment.strip(),
+                                  "at": iso(), "byUserId": party.id, "driverId": vehicle.get("driverId")}
+        row.data = {**row.data, "ratings": ratings, "history": [*row.data.get("history", []),
+                    {"status": "JOURNEY_RATED", "at": iso(), "reason": f'{vehicle["registration"]} · {data.stars}/5'}]}
+        notify(db, row, row.supplier_id, "Passenger journey rated", ("TRANSPORTER", "DISPATCHER"))
+        return {"ok": True}
+
     if action == "live":
         require_permission(db, party, "tracking.read")
         row = db.get(BOOKINGS, data.bookingId)

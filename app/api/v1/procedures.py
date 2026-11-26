@@ -181,6 +181,7 @@ group("passenger", [
     ("review", p.Review, True, False),
 ])
 group("charter", [
+    ("rate", p.CharterRating, True, False),
     ("driverJobs", a.Empty, False, False),
     ("respondJob", p.CharterJobResponse, True, False),
     ("advanceJob", p.CharterLegProgress, True, False),
