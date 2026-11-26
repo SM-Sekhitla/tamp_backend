@@ -78,14 +78,14 @@ def validate_allocation(db, row, quote, *, lock=False):
     ).order_by(VEHICLES.id)
     vehicles = [entry.data for entry in db.scalars(query.with_for_update().execution_options(populate_existing=True) if lock else query)]
     require(len(vehicles) == len(ids), "Select vehicles from your passenger fleet", 404)
-    driver_ids = {vehicle.get("driverId") for vehicle in vehicles}
-    require(None not in driver_ids and len(driver_ids) == len(vehicles),
+    driver_ids = {vehicle.get("driverId") for vehicle in vehicles if vehicle.get("driverId")}
+    require(len(driver_ids) == sum(bool(vehicle.get("driverId")) for vehicle in vehicles),
             "Assign a different driver to every quoted vehicle", 409)
     if lock:
         list(db.scalars(select(User.id).where(User.id.in_(driver_ids)).order_by(User.id).with_for_update()))
     through = end.astimezone(SA).date()
     for vehicle in vehicles:
-        issue = publication_issue(db, vehicle, row.supplier_id, through=through, require_driver=True)
+        issue = publication_issue(db, vehicle, row.supplier_id, through=through)
         require(not issue, issue or "", 409)
         availability = vehicle["availability"]
         require(timestamp(availability["start"]) <= start and timestamp(availability["end"]) >= end,
@@ -110,7 +110,8 @@ def occupied_fleet(db, booking_id, start, end):
         if start < timestamp(reserved["end"]) and timestamp(reserved["start"]) < end:
             for vehicle in reserved["vehicles"]:
                 vehicles.add(vehicle["id"])
-                drivers.add(vehicle["driverId"])
+                if vehicle.get("driverId"):
+                    drivers.add(vehicle["driverId"])
     return vehicles, drivers
 
 
@@ -200,7 +201,8 @@ def choose_allocation(record, candidates, provider_priority=None, *, fixed=()):
             if vehicle["driverId"] in drivers:
                 continue
             group.append(vehicle)
-            drivers.add(vehicle["driverId"])
+            if vehicle.get("driverId"):
+                    drivers.add(vehicle["driverId"])
             if fits(group):
                 plans.append(group)
                 break
@@ -379,8 +381,8 @@ def transition_group(db, org, data):
                     for row in rows), "Every transporter must provide a current quote", 409)
         snapshots = [v for row in rows for v in row.data["quote"]["vehicles"]]
         ids = [v["id"] for v in snapshots]
-        drivers = {v["driverId"] for v in snapshots}
-        require(len(ids) <= 20 and len(set(ids)) == len(ids) == len(drivers),
+        drivers = {v["driverId"] for v in snapshots if v.get("driverId")}
+        require(len(ids) <= 20 and len(set(ids)) == len(ids) and len(drivers) == sum(bool(v.get("driverId")) for v in snapshots),
                 "The combined plan needs distinct vehicles and drivers, with at most 20 vehicles", 409)
         # Same lock order as single bookings. Validate after the locks to catch
         # a competing confirmation or an edit committed while waiting.

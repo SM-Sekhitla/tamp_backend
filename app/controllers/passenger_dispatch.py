@@ -57,7 +57,8 @@ def initialise_jobs(db, row, manifest):
             "offeredAt": record["updatedAt"],
             "legs": {leg: counts[ident] for leg, counts in manifest.items()},
         }
-        notify_user(
+        if vehicle.get("driverId"):
+            notify_user(
             db, vehicle["driverId"], title="New passenger charter assignment",
             detail=f'{vehicle["registration"]} · {record["outbound"]["origin"]["label"]}',
             subject_type="CHARTER_JOB", subject_id=row.id, organisation_id=row.supplier_id,
@@ -211,7 +212,7 @@ def supplier_assignments(db, row):
     return [{
         "vehicleId": vehicle["id"], "registration": vehicle["registration"],
         "canReassign": can_reassign(row, vehicle["id"]),
-        "driverName": drivers.get(vehicle["driverId"]) or "Assigned driver",
+        "driverName": drivers.get(vehicle["driverId"]) or "Driver not assigned",
         **assignment_status(row, vehicle["id"]),
     } for vehicle in quote["vehicles"]]
 

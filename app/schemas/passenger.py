@@ -224,5 +224,5 @@ class CharterDriverOptions(CharterLiveView):
 
 class CharterReassignDriver(CharterDriverOptions):
     driverId: str = Field(max_length=80)
-    expectedDriverId: str = Field(max_length=80)
+    expectedDriverId: str | None = Field(default=None, max_length=80)
     reason: str = Field(min_length=1, max_length=500)
