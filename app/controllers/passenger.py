@@ -9,7 +9,7 @@ from app.core.errors import require
 from app.core.security import iso, new_id
 from app.db.models import MODELS, Organisation, OrganisationMembership, User, UserRole
 from app.schemas.passenger import PASSENGER_SUBTYPES
-from app.services.driver_compliance import REQUIRED_DISPATCH_DOCUMENTS
+from app.services.driver_compliance import REQUIRED_DISPATCH_DOCUMENTS, sync_registration_documents
 from app.services.rbac import ROLE_IDS, has_permission, require_permission
 from app.services.records import needed, put
 from app.services.storage import own_upload
@@ -65,6 +65,7 @@ def publication_issue(db, data, org, *, through=None, require_driver=False):
     driver = next((entry for entry in drivers(db, org) if entry.id == data.get("driverId")), None)
     if not driver or driver.data.get("verification") != "VERIFIED" or driver.data.get("suspended"):
         return "Assign a verified driver from your organisation."
+    sync_registration_documents(db, driver, org)
     documents = MODELS["driverDocuments"]
     approved = {
         row.data["documentType"] for row in db.scalars(select(documents).where(
@@ -72,10 +73,12 @@ def publication_issue(db, data, org, *, through=None, require_driver=False):
         ))
         if row.data.get("reviewStatus") == "APPROVED"
         and row.data.get("status") != "REMOVED"
-        and (row.data.get("expiresAt") or "")[:10] >= today
+        and (not row.data.get("expiresAt") or row.data["expiresAt"][:10] >= today)
     }
-    if not REQUIRED_DISPATCH_DOCUMENTS.issubset(approved):
-        return "The driver needs a current, approved driving licence and PrDP."
+    missing = REQUIRED_DISPATCH_DOCUMENTS - approved
+    if missing:
+        labels = {"DRIVING_LICENCE": "Driving licence", "PRDP": "Professional Driving Permit (PrDP)"}
+        return " and ".join(labels[key] for key in sorted(missing)) + " needs approval or renewal before the trip ends."
     return None
 
 
