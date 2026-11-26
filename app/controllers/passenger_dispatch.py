@@ -246,16 +246,23 @@ def reassign_driver(db, party, data, *, save=False):
     _, busy = occupied_fleet(db, row.id, max(start, now()), end)
     busy.update(v["driverId"] for v in quote["vehicles"])
     through = end.astimezone(SA).date()
-    eligible = {
-        driver.id: driver for driver in drivers(db, org)
-        if driver.id not in busy and driver.data.get("role") == "DRIVER"
-        and not publication_issue(db, {**vehicle.data, "driverId": driver.id}, org, through=through, require_driver=True)
-        and "dispatch.respond" in permission_codes(db, driver, org)
-        and "trips.manage" in permission_codes(db, driver, org)
-    }
+    candidates = {}
+    for driver in drivers(db, org):
+        issue = publication_issue(db, {**vehicle.data, "driverId": driver.id}, org,
+                                  through=through, require_driver=True)
+        if driver.id in busy:
+            issue = "Driver already allocated during this reservation"
+        elif "dispatch.respond" not in permission_codes(db, driver, org):
+            issue = "Driver needs permission to accept assignments"
+        elif "trips.manage" not in permission_codes(db, driver, org):
+            issue = "Driver needs permission to operate trips"
+        candidates[driver.id] = (driver, issue)
+    eligible = {ident: driver for ident, (driver, issue) in candidates.items() if not issue}
     if not save:
         return {"expectedDriverId": quoted["driverId"], "drivers": sorted(
-            [{"id": driver.id, "name": driver.data.get("contactName") or driver.email} for driver in eligible.values()],
+            [{"id": driver.id, "name": driver.data.get("contactName") or driver.email,
+              "eligible": not issue, "reason": issue}
+             for driver, issue in candidates.values()],
             key=lambda driver: (driver["name"].casefold(), driver["id"]),
         )}
     reason = data.reason.strip()
